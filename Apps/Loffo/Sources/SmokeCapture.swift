@@ -53,6 +53,16 @@
                             scroll.contentView.scroll(to: origin)
                             scroll.reflectScrolledClipView(scroll.contentView)
                         }
+                        if command == "scroll-down",
+                            let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
+                            let text = descendants(view).compactMap({ $0 as? NSTextView }).first,
+                            let scroll = text.enclosingScrollView
+                        {
+                            var origin = scroll.contentView.bounds.origin
+                            origin.y = 220
+                            scroll.contentView.scroll(to: origin)
+                            scroll.reflectScrolledClipView(scroll.contentView)
+                        }
                         if command == "files" { model?.setDiff(false) }
                         if command == "project", let destination, destination.hasPrefix("/"), let model {
                             let selected = model.selected

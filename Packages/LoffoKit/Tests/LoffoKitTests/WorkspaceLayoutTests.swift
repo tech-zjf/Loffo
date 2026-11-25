@@ -158,6 +158,11 @@ import Testing
                 "diff=\(diff), frame=\(scroll.frame), type=\(type(of: scroll))")
             #expect(scroll.borderType == .noBorder)
             #expect(!scroll.drawsBackground)
+            // SwiftUI-owned panel scroll views must restore the overlay style immediately.
+            if scroll.documentView is NSTextView == false {
+                scroll.scrollerStyle = .legacy
+                #expect(scroll.scrollerStyle == .overlay)
+            }
         }
     }
 }

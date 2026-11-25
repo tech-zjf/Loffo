@@ -21,7 +21,7 @@ public struct CodeEditor: NSViewRepresentable {
 
     public func makeCoordinator() -> Coordinator { Coordinator() }
     public func makeNSView(context: Context) -> NSView {
-        let scroll = NSScrollView()
+        let scroll = EditorScrollView()
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         LoffoScrollAppearance.apply(to: scroll)

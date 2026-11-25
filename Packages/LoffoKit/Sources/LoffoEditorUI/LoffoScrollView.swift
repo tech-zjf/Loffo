@@ -72,7 +72,7 @@ private struct ScrollAppearanceBinding: NSViewRepresentable {
             // Observe this specific scroll view; never change the user's global preference.
             styleObservation = enclosing.observe(\.scrollerStyle, options: [.new]) { [weak self] _, change in
                 guard change.newValue != .overlay else { return }
-                Task { @MainActor [weak self] in self?.applyAppearance() }
+                MainActor.assumeIsolated { self?.applyAppearance() }
             }
         }
         LoffoScrollAppearance.apply(to: enclosing)

@@ -116,6 +116,7 @@ public struct WorkspaceView: View {
             }
             .foregroundStyle(active ? LoffoPalette.accent : LoffoPalette.secondary)
             .frame(width: 40, height: 36)
+            .contentShape(Rectangle())
             .background(
                 active ? LoffoPalette.selection.opacity(0.65) : .clear,
                 in: RoundedRectangle(cornerRadius: 8))

@@ -151,6 +151,10 @@ import Testing
         #expect(abs(scroll.contentView.bounds.minX) < 1)
         #expect(scroll.layer?.masksToBounds == true)
         #expect(scroll.contentView.layer?.masksToBounds == true)
+        #expect(scroll.contentView.layer?.mask == nil)
+        let clip = scroll.contentView.convert(scroll.contentView.bounds, to: scroll)
+        let scroller = try #require(scroll.verticalScroller)
+        #expect(clip.maxX <= scroller.frame.minX)
         let rulerFrame = surface.gutter.frame
         scroll.contentView.scroll(to: NSPoint(x: 180, y: 0))
         scroll.reflectScrolledClipView(scroll.contentView)
@@ -212,4 +216,46 @@ import Testing
     let removed = try colors(.removed)
     #expect(added[0] == removed[0])
     #expect(added[1] != removed[1])
+}
+
+@Test @MainActor func verticalScrollKeepsCodeVisibleAcrossTheViewport() async throws {
+    _ = NSApplication.shared
+    let source = (0..<150).map { "let visibleLine\($0) = \($0)\n" }.joined()
+    let host = NSHostingView(rootView: CodeEditor(presentation: CodePresentation(text: source)))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 900, height: 500),
+        styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.orderBack(nil)
+    defer { window.close() }
+    func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    var surface: EditorSurface?
+    for _ in 0..<100 {
+        host.layoutSubtreeIfNeeded()
+        surface = descendants(host).compactMap { $0 as? EditorSurface }.first
+        if (surface?.scroll.documentView as? NSTextView)?.string == source { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let editor = try #require(surface)
+    let scroll = editor.scroll
+    for offset: CGFloat in [0, 240, 480] {
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        editor.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        let area = NSRect(x: 80, y: 260, width: 300, height: 180)
+        let bitmap = try #require(editor.bitmapImageRepForCachingDisplay(in: area))
+        editor.cacheDisplay(in: area, to: bitmap)
+        var darkPixels = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                if color.redComponent < 0.6 && color.greenComponent < 0.6 && color.blueComponent < 0.6 {
+                    darkPixels += 1
+                }
+            }
+        }
+        #expect(darkPixels > 100, "Text must remain visible near the bottom after scrolling to \(offset)")
+    }
 }
