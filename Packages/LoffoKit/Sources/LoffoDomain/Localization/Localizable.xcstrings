@@ -1,0 +1,296 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "A line exceeds the 20,000 UTF-16 unit limit.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A line exceeds the 20,000 UTF-16 unit limit."
+          }
+        }
+      }
+    },
+    "This document exceeds the supported line count.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document exceeds the supported line count."
+          }
+        }
+      }
+    },
+    "This is a binary file. Image and binary previews are not available yet.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This is a binary file. Image and binary previews are not available yet."
+          }
+        }
+      }
+    },
+    "Git returned an invalid revision.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git returned an invalid revision."
+          }
+        }
+      }
+    },
+    "This folder does not have an available Git baseline.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This folder does not have an available Git baseline."
+          }
+        }
+      }
+    },
+    "Only regular files can be opened in this prototype.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only regular files can be opened in this prototype."
+          }
+        }
+      }
+    },
+    "The baseline exceeds the 30,000-line prototype limit.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The baseline exceeds the 30,000-line prototype limit."
+          }
+        }
+      }
+    },
+    "Git is unavailable for this folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git is unavailable for this folder."
+          }
+        }
+      }
+    },
+    "This file exceeds the prototype's 2 MB reading limit.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file exceeds the prototype's 2 MB reading limit."
+          }
+        }
+      }
+    },
+    "Changed-file listing is unavailable while Git filter drivers are configured. Files remain readable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed-file listing is unavailable while Git filter drivers are configured. Files remain readable."
+          }
+        }
+      }
+    },
+    "This file uses %@. Reading is available; exact comparison is not supported by this prototype.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file uses %@. Reading is available; exact comparison is not supported by this prototype."
+          }
+        }
+      }
+    },
+    "The shared processing budget is full. Retry after other work finishes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The shared processing budget is full. Retry after other work finishes."
+          }
+        }
+      }
+    },
+    "CRLF/CR comparison is not yet validated. Use Files to read this document.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "CRLF/CR comparison is not yet validated. Use Files to read this document."
+          }
+        }
+      }
+    },
+    "This file is not present in HEAD. Added-file comparison is not yet implemented.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is not present in HEAD. Added-file comparison is not yet implemented."
+          }
+        }
+      }
+    },
+    "No readable HEAD commit. Initial and untracked-file comparisons will be added later.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No readable HEAD commit. Initial and untracked-file comparisons will be added later."
+          }
+        }
+      }
+    },
+    "Git returned an invalid history record.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git returned an invalid history record."
+          }
+        }
+      }
+    },
+    "Git is unavailable. Files remain readable; set LOFFO_GIT_EXECUTABLE to enable comparisons.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git is unavailable. Files remain readable; set LOFFO_GIT_EXECUTABLE to enable comparisons."
+          }
+        }
+      }
+    },
+    "The folder cannot be read.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The folder cannot be read."
+          }
+        }
+      }
+    },
+    "The baseline object is not available locally.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The baseline object is not available locally."
+          }
+        }
+      }
+    },
+    "The file is changing during reading. Waiting for the next update.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file is changing during reading. Waiting for the next update."
+          }
+        }
+      }
+    },
+    "Git exceeded the prototype's time or output budget.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git exceeded the prototype's time or output budget."
+          }
+        }
+      }
+    },
+    "Untracked files could not be listed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untracked files could not be listed."
+          }
+        }
+      }
+    },
+    "Unmerged index entries could not be listed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unmerged index entries could not be listed."
+          }
+        }
+      }
+    },
+    "Git is unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git is unavailable."
+          }
+        }
+      }
+    },
+    "A readable HEAD is required to list changes.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A readable HEAD is required to list changes."
+          }
+        }
+      }
+    },
+    "Git configuration changed during the scan. Reload to retry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git configuration changed during the scan. Reload to retry."
+          }
+        }
+      }
+    },
+    "The repository branch cannot be read.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The repository branch cannot be read."
+          }
+        }
+      }
+    },
+    "This file is not valid UTF-8. Its contents have not been modified.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is not valid UTF-8. Its contents have not been modified."
+          }
+        }
+      }
+    },
+    "File history is unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File history is unavailable."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
