@@ -10,6 +10,12 @@ import TreeSitterTypeScript
 
 /// One actor owns the parser and its editable tree. No C objects escape this boundary.
 public actor TreeSyntax: SyntaxProviding {
+    private struct ParseInput {
+        let bytes: UnsafePointer<CChar>?
+        let count: Int
+        let deadline: UInt64
+    }
+
     private struct PendingSpan {
         let startByte: Int
         let endByte: Int
@@ -18,26 +24,57 @@ public actor TreeSyntax: SyntaxProviding {
 
     private let storage = ParserStorage()
     private var previous: TextSnapshot?
+    var retainedSnapshot: TextSnapshot? { previous }
     private var languageExtension = ""
+    private var cacheGeneration: UInt64 = 0
     private let admission: WorkAdmission
+    private static let spanLimit = 120_000
     public init(admission: WorkAdmission = WorkAdmission()) { self.admission = admission }
 
+    public func discardCachedTree() {
+        cacheGeneration &+= 1
+        discardTree()
+    }
+
+    #if DEBUG
+        public var diagnosticHasCachedTree: Bool { previous != nil }
+    #endif
+
     public func highlights(for snapshot: TextSnapshot) async -> [SyntaxSpan] {
-        let cost = snapshot.byteCount * 12
-        do { try await admission.acquire(bytes: cost) } catch { return [] }
-        let spans = compute(snapshot)
+        await highlightsWithStatus(for: snapshot).spans
+    }
+
+    public func highlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights {
+        await highlightsWithStatus(for: snapshot, retainingTree: true)
+    }
+
+    public func transientHighlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights {
+        await highlightsWithStatus(for: snapshot, retainingTree: false)
+    }
+
+    private func highlightsWithStatus(for snapshot: TextSnapshot, retainingTree: Bool) async
+        -> SyntaxHighlights
+    {
+        let generation = cacheGeneration
+        let cost = snapshot.byteCount * 12 + Self.spanLimit * 48
+        do { try await admission.acquire(bytes: cost) } catch {
+            if !retainingTree { discardTree() }
+            return SyntaxHighlights(spans: [], isLimited: true)
+        }
+        let spans = compute(snapshot, retainingTree: retainingTree && generation == cacheGeneration)
         await admission.release(bytes: cost)
         return spans
     }
 
-    private func compute(_ snapshot: TextSnapshot) -> [SyntaxSpan] {
+    private func compute(_ snapshot: TextSnapshot, retainingTree: Bool) -> SyntaxHighlights {
         let signposter = OSSignposter(subsystem: "app.loffo", category: "Syntax")
         let interval = signposter.beginInterval("syntaxComputed")
         defer { signposter.endInterval("syntaxComputed", interval) }
+        defer { if !retainingTree { discardTree() } }
         let ext = snapshot.url.pathExtension.lowercased()
-        guard !Task.isCancelled else { return [] }
+        guard !Task.isCancelled else { return SyntaxHighlights(spans: [], isLimited: true) }
         if ext == "py" || ext == "pyi" { return Self.pythonSpans(in: snapshot.text) }
-        guard let parser = storage.parser else { return [] }
+        guard let parser = storage.parser else { return SyntaxHighlights(spans: [], isLimited: true) }
         ts_parser_reset(parser)
         let language: OpaquePointer?
         switch ext {
@@ -46,10 +83,11 @@ public actor TreeSyntax: SyntaxProviding {
         case "swift": language = tree_sitter_swift()
         case "rs": language = tree_sitter_rust()
         case "java": language = tree_sitter_java()
-        default: return []
+        default: return SyntaxHighlights(spans: [], isLimited: false)
         }
-        guard ts_parser_set_language(parser, language) else { return [] }
-        ts_parser_set_timeout_micros(parser, 500_000)
+        guard ts_parser_set_language(parser, language) else {
+            return SyntaxHighlights(spans: [], isLimited: true)
+        }
         let bytes = Array(snapshot.text.utf8)
         if let previous, previous.url == snapshot.url, languageExtension == ext, let tree = storage.tree {
             var edit = Self.edit(from: Array(previous.text.utf8), to: bytes)
@@ -58,26 +96,74 @@ public actor TreeSyntax: SyntaxProviding {
             storage.clearTree()
         }
         let tree = bytes.withUnsafeBytes { raw in
-            ts_parser_parse_string(
-                parser, storage.tree,
-                raw.baseAddress?.assumingMemoryBound(to: CChar.self), UInt32(bytes.count))
+            var input = ParseInput(
+                bytes: raw.baseAddress?.assumingMemoryBound(to: CChar.self), count: bytes.count,
+                deadline: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
+            return withUnsafeMutablePointer(to: &input) { context in
+                let source = TSInput(
+                    payload: context,
+                    read: { payload, offset, _, length in
+                        guard let payload, let length else { return nil }
+                        let input = payload.assumingMemoryBound(to: ParseInput.self).pointee
+                        let index = Int(offset)
+                        guard index < input.count, let bytes = input.bytes else {
+                            length.pointee = 0
+                            return nil
+                        }
+                        length.pointee = UInt32(input.count - index)
+                        return bytes.advanced(by: index)
+                    },
+                    encoding: TSInputEncodingUTF8, decode: nil)
+                let options = TSParseOptions(
+                    payload: context,
+                    progress_callback: { state in
+                        guard let payload = state?.pointee.payload else { return true }
+                        let deadline = payload.assumingMemoryBound(to: ParseInput.self).pointee.deadline
+                        return Task.isCancelled || DispatchTime.now().uptimeNanoseconds >= deadline
+                    })
+                return ts_parser_parse_with_options(parser, storage.tree, source, options)
+            }
         }
         storage.clearTree()
         guard let tree else {
             previous = nil
             ts_parser_reset(parser)
-            return []
+            return SyntaxHighlights(spans: [], isLimited: true)
         }
         storage.tree = tree
         previous = snapshot
         languageExtension = ext
         var pending: [PendingSpan] = []
         var nodes = [ts_tree_root_node(tree)]
-        while let node = nodes.popLast(), pending.count < 30_000 {
+        var visited = 0
+        while pending.count < Self.spanLimit, let node = nodes.popLast() {
+            visited += 1
+            if visited.isMultiple(of: 1_024), Task.isCancelled {
+                return SyntaxHighlights(spans: [], isLimited: true)
+            }
             let type = String(cString: ts_node_type(node))
             let start = Int(ts_node_start_byte(node))
             let end = Int(ts_node_end_byte(node))
             var kind = Self.kind(type)
+            if kind == nil, ["identifier", "shorthand_property_identifier_pattern"].contains(type),
+                ["ts", "tsx", "js", "jsx", "mjs", "cjs"].contains(ext)
+            {
+                let parent = ts_node_parent(node)
+                if Self.isParameterBinding(node) {
+                    kind = .parameter
+                } else if type == "identifier", !ts_node_is_null(parent) {
+                    let parentType = String(cString: ts_node_type(parent))
+                    if parentType == "call_expression",
+                        ts_node_eq(node, ts_node_child_by_field_name(parent, "function", 8))
+                    {
+                        kind = .functionCall
+                    } else if parentType == "new_expression",
+                        ts_node_eq(node, ts_node_child_by_field_name(parent, "constructor", 11))
+                    {
+                        kind = .constructor
+                    }
+                }
+            }
             if kind == .string {
                 let parent = ts_node_parent(node)
                 if !ts_node_is_null(parent), String(cString: ts_node_type(parent)) == "import_statement" {
@@ -93,7 +179,41 @@ public actor TreeSyntax: SyntaxProviding {
                 }
             }
         }
-        return Self.utf16Spans(in: snapshot.text, pending: pending) ?? []
+        guard let spans = Self.utf16Spans(in: snapshot.text, pending: pending) else {
+            return SyntaxHighlights(spans: [], isLimited: true)
+        }
+        return SyntaxHighlights(spans: spans, isLimited: !nodes.isEmpty)
+    }
+
+    private func discardTree() {
+        storage.clearTree()
+        previous = nil
+        languageExtension = ""
+    }
+
+    /// Follow only binding sides of patterns; defaults, computed keys and local destructuring are expressions.
+    private static func isParameterBinding(_ node: TSNode) -> Bool {
+        var child = node
+        while true {
+            let parent = ts_node_parent(child)
+            guard !ts_node_is_null(parent) else { return false }
+            switch String(cString: ts_node_type(parent)) {
+            case "required_parameter", "optional_parameter":
+                return ts_node_eq(child, ts_node_child_by_field_name(parent, "pattern", 7))
+                    || ts_node_eq(child, ts_node_child_by_field_name(parent, "name", 4))
+            case "arrow_function":
+                return ts_node_eq(child, ts_node_child_by_field_name(parent, "parameter", 9))
+            case "pair_pattern":
+                guard ts_node_eq(child, ts_node_child_by_field_name(parent, "value", 5)) else { return false }
+            case "assignment_pattern", "object_assignment_pattern":
+                guard ts_node_eq(child, ts_node_child_by_field_name(parent, "left", 4)) else { return false }
+            case "array_pattern", "object_pattern", "rest_pattern":
+                break
+            default:
+                return false
+            }
+            child = parent
+        }
     }
 
     private static func kind(_ type: String) -> SyntaxKind? {
@@ -124,12 +244,29 @@ public actor TreeSyntax: SyntaxProviding {
         return nil
     }
 
-    private static func pythonSpans(in text: String) -> [SyntaxSpan] {
+    static func pythonSpans(in text: String, isCancelled: () -> Bool = { Task.isCancelled })
+        -> SyntaxHighlights
+    {
         let pattern =
             ##"(?m)(#[^\n]*)|((?i:[rubf]{0,2})(?:'''[\s\S]*?'''|\"\"\"[\s\S]*?\"\"\"|'(?:\\\\.|[^'\\\\])*'|\"(?:\\\\.|[^\"\\\\])*\"))|(\b\d+(?:\.\d+)?\b)|(\b(?:False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b)"##
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return SyntaxHighlights(spans: [], isLimited: true)
+        }
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.matches(in: text, range: fullRange).prefix(30_000).compactMap { match in
+        var spans: [SyntaxSpan] = []
+        var limited = false
+        regex.enumerateMatches(in: text, options: [.reportProgress], range: fullRange) { match, _, stop in
+            if isCancelled() {
+                limited = true
+                stop.pointee = true
+                return
+            }
+            guard let match else { return }
+            guard spans.count < spanLimit else {
+                limited = true
+                stop.pointee = true
+                return
+            }
             let kind: SyntaxKind
             if match.range(at: 1).location != NSNotFound {
                 kind = .comment
@@ -140,8 +277,9 @@ public actor TreeSyntax: SyntaxProviding {
             } else {
                 kind = .keyword
             }
-            return SyntaxSpan(range: match.range, kind: kind)
+            spans.append(SyntaxSpan(range: match.range, kind: kind))
         }
+        return SyntaxHighlights(spans: spans, isLimited: limited)
     }
 
     /// Convert only the syntax ranges Tree-sitter emitted. A byte-sized offset table costs 4× the
@@ -150,18 +288,23 @@ public actor TreeSyntax: SyntaxProviding {
         var scalars = text.unicodeScalars.makeIterator()
         var byteOffset = 0
         var utf16Offset = 0
+        var scalarCount = 0
         var result: [SyntaxSpan] = []
         result.reserveCapacity(pending.count)
         for span in pending {
             guard span.startByte >= byteOffset, span.endByte >= span.startByte else { return nil }
             while byteOffset < span.startByte {
                 guard let scalar = scalars.next() else { return nil }
+                scalarCount += 1
+                if scalarCount.isMultiple(of: 4_096), Task.isCancelled { return nil }
                 byteOffset += scalar.utf8.count
                 utf16Offset += scalar.utf16.count
             }
             let start = utf16Offset
             while byteOffset < span.endByte {
                 guard let scalar = scalars.next() else { return nil }
+                scalarCount += 1
+                if scalarCount.isMultiple(of: 4_096), Task.isCancelled { return nil }
                 byteOffset += scalar.utf8.count
                 utf16Offset += scalar.utf16.count
             }

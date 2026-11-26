@@ -47,14 +47,22 @@ import LoffoDomain
         gutter.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
         scroll.frame = NSRect(
             x: width, y: 0, width: max(0, bounds.width - width - trailing), height: bounds.height)
+        updateDocumentHeight()
         needsDisplay = true
+    }
+
+    func updateDocumentHeight() {
+        guard let text = scroll.documentView as? NSTextView else { return }
+        let lineHeight = CGFloat(max(1, gutter.lineCount)) * LoffoMetrics.line
+        let height = max(scroll.contentView.bounds.height, lineHeight + 2 * text.textContainerInset.height)
+        guard abs(text.frame.height - height) > 0.5 else { return }
+        text.setFrameSize(NSSize(width: text.frame.width, height: height))
     }
 }
 
 @MainActor final class LineGutter: NSView {
     weak var scrollView: NSScrollView?
     override var isFlipped: Bool { true }
-    var numbers: [String]?
     var diffLines: [DiffLine]?
     var displayRows: [PresentedLine]?
     var lineCount = 0
@@ -68,7 +76,7 @@ import LoffoDomain
             .foregroundColor: NSColor(LoffoPalette.secondary),
         ]
         for line in first...last {
-            if line >= (displayRows?.count ?? numbers?.count ?? lineCount) { break }
+            if line >= (displayRows?.count ?? diffLines?.count ?? lineCount) { break }
             let item: DiffLine?
             if let rows = displayRows {
                 // A virtual heading deliberately has no source line; never fall back by raw index.

@@ -1,6 +1,66 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "This file has unresolved Git conflicts. Resolve them before reviewing the change.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file has unresolved Git conflicts. Resolve them before reviewing the change."
+          }
+        }
+      }
+    },
+    "File mode changes are not yet supported. This change cannot be reviewed here.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File mode changes are not yet supported. This change cannot be reviewed here."
+          }
+        }
+      }
+    },
+    "Changed files could not be listed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changed files could not be listed."
+          }
+        }
+      }
+    },
+    "No readable HEAD commit.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No readable HEAD commit."
+          }
+        }
+      }
+    },
+    "Git metadata location is unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git metadata location is unavailable."
+          }
+        }
+      }
+    },
+    "HEAD changed during the scan. Reload to retry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HEAD changed during the scan. Reload to retry."
+          }
+        }
+      }
+    },
     "A line exceeds the 20,000 UTF-16 unit limit.": {
       "localizations": {
         "en": {
@@ -211,6 +271,16 @@
         }
       }
     },
+    "Git received an invalid argument or environment value.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git received an invalid argument or environment value."
+          }
+        }
+      }
+    },
     "Untracked files could not be listed.": {
       "localizations": {
         "en": {
@@ -287,6 +357,76 @@
           "stringUnit": {
             "state": "translated",
             "value": "File history is unavailable."
+          }
+        }
+      }
+    },
+    "The baseline tree is not available locally.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The baseline tree is not available locally."
+          }
+        }
+      }
+    },
+    "Git returned an invalid baseline tree entry.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git returned an invalid baseline tree entry."
+          }
+        }
+      }
+    },
+    "Symbolic links and submodules cannot be reviewed as text files.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Symbolic links and submodules cannot be reviewed as text files."
+          }
+        }
+      }
+    },
+    "The file path is outside the opened folder.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file path is outside the opened folder."
+          }
+        }
+      }
+    },
+    "The opened folder is no longer available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The opened folder is no longer available."
+          }
+        }
+      }
+    },
+    "A parent folder is a symbolic link or is no longer a directory.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A parent folder is a symbolic link or is no longer a directory."
+          }
+        }
+      }
+    },
+    "Symbolic links cannot be opened as files.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Symbolic links cannot be opened as files."
           }
         }
       }

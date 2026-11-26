@@ -341,6 +341,16 @@
         }
       }
     },
+    "Copied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied"
+          }
+        }
+      }
+    },
     "Copy path": {
       "localizations": {
         "en": {
@@ -817,6 +827,66 @@
           "stringUnit": {
             "state": "translated",
             "value": "Resize changes panel"
+          }
+        }
+      }
+    },
+    "Changes unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes unavailable"
+          }
+        }
+      }
+    },
+    "Checking for changes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking for changes"
+          }
+        }
+      }
+    },
+    "File monitoring unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File monitoring unavailable"
+          }
+        }
+      }
+    },
+    "Initial → Working tree": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Initial → Working tree"
+          }
+        }
+      }
+    },
+    "No changes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No changes"
+          }
+        }
+      }
+    },
+    "Syntax highlighting is incomplete for this file.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syntax highlighting is incomplete for this file."
           }
         }
       }

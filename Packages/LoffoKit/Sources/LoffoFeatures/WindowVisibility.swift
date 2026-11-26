@@ -23,7 +23,7 @@ struct WindowVisibility: NSViewRepresentable {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            window.standardWindowButton(button)?.isHidden = true
+            window.standardWindowButton(button)?.isHidden = false
         }
         observation = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,

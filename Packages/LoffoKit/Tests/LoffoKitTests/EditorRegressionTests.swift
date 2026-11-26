@@ -59,6 +59,91 @@ import Testing
     #expect(NSMaxRange(text.selectedRange()) <= updated.utf16.count)
 }
 
+@Test @MainActor func largeFixedHeightDocumentScrollsAndCopiesTheLastUnicodeLine() async throws {
+    _ = NSApplication.shared
+    let source =
+        (0..<20_000).map {
+            "let value\($0) = \"中文\"" + ($0.isMultiple(of: 2) ? "\r\n" : "\n")
+        }.joined() + "👩🏽‍💻 final line"
+    let host = NSHostingView(rootView: CodeEditor(presentation: CodePresentation(text: source)))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 900, height: 500),
+        styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.orderBack(nil)
+    defer { window.close() }
+    func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    for _ in 0..<300 {
+        host.layoutSubtreeIfNeeded()
+        if descendants(host).compactMap({ $0 as? NSTextView }).first?.string == source { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let text = try #require(descendants(host).compactMap { $0 as? TrackingTextView }.first)
+    #expect(text.string == source)
+    #expect(!text.isVerticallyResizable)
+    let scroll = try #require(text.enclosingScrollView)
+    let manager = try #require(text.textLayoutManager)
+    let content = try #require(manager.textContentManager)
+    let maximum = max(0, text.frame.height - scroll.contentView.bounds.height)
+    let selected = (source as NSString).range(of: "value50")
+    text.setSelectedRange(selected)
+    for index in 0..<100 {
+        let y = CGFloat(index) * 20 + 4
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        manager.textViewportLayoutController.layoutViewport()
+        let viewport = try #require(manager.textViewportLayoutController.viewportRange)
+        let offset = content.offset(from: content.documentRange.location, to: viewport.location)
+        let line = (source as NSString).substring(to: offset).reduce(1) { $1.isNewline ? $0 + 1 : $0 }
+        #expect(abs(line - (index + 1)) <= 2)
+        #expect(text.selectedRange() == selected)
+    }
+    for (fraction, minimumLine, maximumLine) in [
+        (0.0, 1, 3), (0.5, 9_900, 10_100), (1.0, 19_900, 20_001), (0.0, 1, 3),
+    ] {
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: maximum * fraction))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        if fraction == 0, let immediate = manager.textViewportLayoutController.viewportRange {
+            let immediateOffset = content.offset(from: content.documentRange.location, to: immediate.location)
+            #expect(immediateOffset < 100, "Returning to the top must immediately relocate the viewport")
+        }
+        manager.textViewportLayoutController.layoutViewport()
+        let viewport = try #require(manager.textViewportLayoutController.viewportRange)
+        let offset = content.offset(from: content.documentRange.location, to: viewport.location)
+        let prefix = (source as NSString).substring(to: offset)
+        let line = prefix.reduce(1) { $1.isNewline ? $0 + 1 : $0 }
+        #expect(line >= minimumLine && line <= maximumLine)
+        if fraction == 0.5 {
+            let target = (source as NSString).range(of: "let value10000")
+            let hit = text.characterIndexForInsertion(at: NSPoint(x: 25, y: 200_014))
+            #expect(abs(hit - target.location) <= 1)
+        }
+    }
+    window.makeFirstResponder(text)
+    text.scrollToEndOfDocument(nil)
+    #expect(scroll.contentView.bounds.minY > maximum - 2 * scroll.contentView.bounds.height)
+    text.scrollToBeginningOfDocument(nil)
+    #expect(scroll.contentView.bounds.minY < 2 * scroll.contentView.bounds.height)
+    let expected = "👩🏽‍💻 final line"
+    let selection = (source as NSString).range(of: expected, options: .backwards)
+    text.setSelectedRange(selection)
+    let clipboard = NSPasteboard(name: NSPasteboard.Name("loffo-tests-\(UUID())"))
+    defer { clipboard.releaseGlobally() }
+    clipboard.declareTypes([.string], owner: nil)
+    #expect(text.writeSelection(to: clipboard, type: .string))
+    #expect(clipboard.string(forType: .string) == expected)
+    let short = "first\r\n第二行\nlast"
+    host.rootView = CodeEditor(presentation: CodePresentation(text: short))
+    for _ in 0..<200 where text.string != short { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(text.string == short)
+    for _ in 0..<100 where scroll.contentView.bounds.minY != 0 {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(scroll.contentView.bounds.minY == 0)
+    #expect(text.frame.height >= scroll.contentView.bounds.height)
+}
+
 @Test @MainActor func diffGutterNeverOverlapsToolbarOrUnindentedCode() async throws {
     _ = NSApplication.shared
     let lines = [
@@ -136,6 +221,8 @@ import Testing
     }
     let surface = try #require(descendants(host).compactMap { $0 as? EditorSurface }.first)
     let scroll = surface.scroll
+    let text = try #require(scroll.documentView as? NSTextView)
+    #expect(text.frame.width > scroll.contentView.bounds.width)
     for presentation in [comparison, reading, comparison] {
         scroll.contentView.scroll(to: NSPoint(x: 240, y: 0))
         host.rootView = CodeEditor(presentation: presentation)
@@ -258,4 +345,105 @@ import Testing
         }
         #expect(darkPixels > 100, "Text must remain visible near the bottom after scrolling to \(offset)")
     }
+}
+
+@Test @MainActor func resizingWindowDecoratesNewlyVisibleSyntax() async throws {
+    _ = NSApplication.shared
+    let line = "keyword value\n"
+    let source = String(repeating: line, count: 80)
+    let spans = (0..<80).map {
+        SyntaxSpan(range: NSRange(location: $0 * line.utf16.count, length: 7), kind: .keyword)
+    }
+    let presentation = CodePresentation(text: source, syntax: spans)
+    let host = NSHostingView(rootView: CodeEditor(presentation: presentation))
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 900, height: 180),
+        styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = host
+    window.orderBack(nil)
+    defer { window.close() }
+    func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    for _ in 0..<200 {
+        host.layoutSubtreeIfNeeded()
+        if descendants(host).compactMap({ $0 as? NSTextView }).first?.string == source { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let text = try #require(descendants(host).compactMap { $0 as? NSTextView }.first)
+    window.setContentSize(NSSize(width: 900, height: 600))
+    host.layoutSubtreeIfNeeded()
+    window.displayIfNeeded()
+    try await Task.sleep(for: .milliseconds(100))
+    let color = try #require(
+        (text.textStorage?.attribute(.foregroundColor, at: 20 * line.utf16.count, effectiveRange: nil)
+            as? NSColor)?.usingColorSpace(.sRGB))
+    #expect(color.redComponent > 0.6 && color.blueComponent > 0.9)
+    let storage = try #require(text.textStorage)
+    let counter = StorageEditCounter()
+    counter.storage = storage
+    let observer = NotificationCenter.default.addObserver(
+        forName: NSTextStorage.didProcessEditingNotification, object: storage, queue: .main
+    ) { _ in
+        MainActor.assumeIsolated {
+            counter.count += 1
+            counter.units += counter.storage?.editedRange.length ?? 0
+        }
+    }
+    defer { NotificationCenter.default.removeObserver(observer) }
+    for width in 901...910 {
+        window.setContentSize(NSSize(width: width, height: 600))
+        host.layoutSubtreeIfNeeded()
+    }
+    #expect(counter.count == 0, "Width-only resize must not repeatedly decorate the same visible lines")
+    let scroll = try #require(text.enclosingScrollView)
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 20))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    #expect(counter.units < 100, "One-line scrolling should update only newly visible text")
+    let lastVisibleLine = min(79, Int(scroll.contentView.bounds.maxY / 20))
+    let scrolledColor = try #require(
+        (storage.attribute(.foregroundColor, at: lastVisibleLine * line.utf16.count, effectiveRange: nil)
+            as? NSColor)?.usingColorSpace(.sRGB))
+    #expect(scrolledColor.redComponent > 0.6 && scrolledColor.blueComponent > 0.9)
+    host.rootView = CodeEditor(
+        presentation: presentation, syntaxTheme: EditorSyntaxTheme(colors: [.keyword: "00CC00"]))
+    for _ in 0..<100 {
+        let updated =
+            (storage.attribute(.foregroundColor, at: 20 * line.utf16.count, effectiveRange: nil)
+            as? NSColor)?.usingColorSpace(.sRGB)
+        if (updated?.greenComponent ?? 0) > 0.7 { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let updated = try #require(
+        (storage.attribute(.foregroundColor, at: 20 * line.utf16.count, effectiveRange: nil)
+            as? NSColor)?.usingColorSpace(.sRGB))
+    #expect(updated.greenComponent > 0.7 && updated.redComponent < 0.2)
+}
+
+@MainActor private final class StorageEditCounter {
+    var count = 0
+    var units = 0
+    weak var storage: NSTextStorage?
+}
+
+@Test @MainActor func newerPresentationNeverAppliesAnOlderPendingPatch() async throws {
+    _ = NSApplication.shared
+    let text = TrackingTextView(usingTextLayoutManager: true)
+    let scroll = EditorScrollView()
+    scroll.documentView = text
+    let surface = EditorSurface(scroll: scroll, gutterWidth: 48)
+    let coordinator = CodeEditor.Coordinator()
+    coordinator.connect(text, surface: surface)
+    defer { coordinator.disconnect() }
+    let stale = CodePresentation(text: String(repeating: "stale content\n", count: 8_000))
+    let latest = CodePresentation(text: "latest content\n")
+    coordinator.submit(stale, theme: .standard)
+    coordinator.submit(latest, theme: .standard)
+    var observedStale = false
+    for _ in 0..<300 {
+        if text.string == stale.text { observedStale = true }
+        if text.string == latest.text { break }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    #expect(!observedStale)
+    #expect(text.string == latest.text)
 }

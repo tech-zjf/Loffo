@@ -18,7 +18,7 @@ Open a local folder, browse its files, and read code in a native text view. Loff
 
 - **Explore a project** — browse the file tree, filter paths, and resize or collapse the sidebar.
 - **Read code** — select and copy text, scroll horizontally or vertically, and use syntax highlighting for supported languages.
-- **Review changes** — inspect a unified comparison against a captured Git HEAD, navigate change blocks, and see file-level additions and removals.
+- **Review changes** — inspect a unified comparison against a captured Git HEAD or an empty initial baseline, navigate change blocks, and see file-level additions and removals.
 - **Follow local work** — refresh content after external file changes and inspect recent commits for the selected file.
 - **Make it yours** — import supported color rules from a VS Code theme JSON file.
 
@@ -41,7 +41,7 @@ Choose **File → Open Folder…** and select a local project. Use the icons on 
 
 Loffo is an early prototype, not a finished release. It reads UTF-8 regular files within a 2 MiB limit, fewer than 30,000 lines, and a 20,000 UTF-16-unit line limit. Syntax highlighting supports TypeScript/JavaScript, Swift, Rust, Java and Python with varying coverage; other supported text can be read without highlighting.
 
-The current comparison is **captured HEAD → working tree**. Some cases, including CRLF comparisons, untracked or deleted file comparisons, and files using unsupported Git attributes or filters, are limited or unavailable. Split diff, full-text search, editing and saving are not yet implemented. Performance, accessibility and visual fidelity are still being validated.
+The current comparison is **captured HEAD → working tree**, including added, untracked and deleted text files when a readable HEAD exists. Before the first commit, existing added and untracked text files are compared with an empty initial baseline. Some cases, including CRLF comparisons and files using unsupported Git attributes or filters, are limited or unavailable. Split diff, full-text search, editing and saving are not yet implemented. Performance, accessibility and visual fidelity are still being validated.
 
 ## Development
 

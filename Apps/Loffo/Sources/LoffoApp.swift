@@ -24,10 +24,15 @@ import SwiftUI
     let syntax: TreeSyntax
     let diff: LineDiff
     let watcher = FileWatchHub()
+    let readAdmission = WorkAdmission(maximumJobs: 4, maximumBytes: 4)
+    let baselineAdmission = WorkAdmission(maximumJobs: 8, maximumBytes: 64 * 1_024 * 1_024)
+    let processingAdmission: WorkAdmission
     let previews = PreviewCache(maximumEntries: 32, maximumBytes: 32 * 1_024 * 1_024)
+    private var memoryPressure: (any DispatchSourceMemoryPressure)?
     var benchmarkWindowsOpened = false
     init() {
         let admission = WorkAdmission()
+        processingAdmission = admission
         syntax = TreeSyntax(admission: admission)
         diff = LineDiff(admission: admission)
         // Use an installed executable directly; never invoke the CLT installer shim.
@@ -40,7 +45,31 @@ import SwiftUI
             ]
         let path = candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
         workspace = LocalWorkspace(gitExecutable: path.map { URL(fileURLWithPath: $0) })
+        let pressure = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical], queue: .main)
+        pressure.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in await self?.discardReconstructibleCaches() }
+        }
+        memoryPressure = pressure
+        pressure.resume()
     }
+
+    fileprivate func discardReconstructibleCaches() async {
+        previews.removeAll()
+        async let snapshots: Void = workspace.discardCachedSnapshots()
+        async let tree: Void = syntax.discardCachedTree()
+        _ = await (snapshots, tree)
+    }
+
+    #if DEBUG
+        fileprivate func cacheDiagnostics() async -> [String: Int] {
+            let snapshotBytes = await workspace.diagnosticCachedBytes
+            let hasTree = await syntax.diagnosticHasCachedTree
+            return [
+                "previewBytes": previews.bytes, "snapshotBytes": snapshotBytes, "syntaxTree": hasTree ? 1 : 0,
+            ]
+        }
+    #endif
 }
 
 private struct WindowRoot: View {
@@ -52,7 +81,9 @@ private struct WindowRoot: View {
         _model = StateObject(
             wrappedValue: WorkspaceModel(
                 workspace: services.workspace, syntax: services.syntax, diff: services.diff,
-                observer: services.watcher, previews: services.previews))
+                observer: services.watcher, previews: services.previews,
+                appReadAdmission: services.readAdmission, baselineAdmission: services.baselineAdmission,
+                processingAdmission: services.processingAdmission))
     }
     var body: some View {
         WorkspaceView(model: model).background {
@@ -67,6 +98,13 @@ private struct WindowRoot: View {
             let benchmarkProject = BenchmarkProbe.register(model)
             #if DEBUG
                 SmokeCapture.model = model
+                SmokeCapture.simulateMemoryPressure = { [weak services] in
+                    guard let services else { return [:] }
+                    let before = await services.cacheDiagnostics()
+                    await services.discardReconstructibleCaches()
+                    let after = await services.cacheDiagnostics()
+                    return ["before": before, "after": after]
+                }
                 if args.contains("--smoke-screenshot") { print("SMOKE args: \(args)") }
             #endif
             let suppliedProject = args.firstIndex(of: "--project").flatMap { index in

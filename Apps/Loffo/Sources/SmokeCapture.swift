@@ -5,6 +5,7 @@
     /// Developer-only capture of this application's own hierarchy after model and native text agree.
     @MainActor enum SmokeCapture {
         static weak var model: WorkspaceModel?
+        static var simulateMemoryPressure: (@MainActor () async -> [String: [String: Int]])?
         private static var observer: NSObjectProtocol?
         static func scheduleIfRequested() {
             let arguments = ProcessInfo.processInfo.arguments
@@ -43,6 +44,7 @@
                         }
                         if command == "diff" { model?.setDiff(true) }
                         if command == "next-change" { model?.navigateHunk(1) }
+                        if command == "toggle-context" { model?.toggleContext() }
                         if command == "scroll-right" || command == "scroll-left",
                             let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
                             let text = descendants(view).compactMap({ $0 as? NSTextView }).first,
@@ -63,7 +65,47 @@
                             scroll.contentView.scroll(to: origin)
                             scroll.reflectScrolledClipView(scroll.contentView)
                         }
+                        if command == "scroll-to", let destination, let y = Double(destination), y.isFinite,
+                            let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
+                            let text = descendants(view).compactMap({ $0 as? NSTextView }).first,
+                            let scroll = text.enclosingScrollView
+                        {
+                            let clip = scroll.contentView
+                            let origin = clip.constrainBoundsRect(
+                                NSRect(origin: NSPoint(x: 0, y: max(0, y)), size: clip.bounds.size)
+                            ).origin
+                            clip.scroll(to: origin)
+                            scroll.reflectScrolledClipView(clip)
+                        }
                         if command == "files" { model?.setDiff(false) }
+                        if command == "benchmark-capture", let destination, destination.hasPrefix("/") {
+                            BenchmarkProbe.captureNow(to: URL(fileURLWithPath: destination))
+                        }
+                        if command == "memory-pressure", let destination, destination.hasPrefix("/") {
+                            let before = model?.presentation?.text
+                            Task {
+                                let caches = await simulateMemoryPressure?() ?? [:]
+                                let after = model?.presentation?.text
+                                let nativeMatches =
+                                    model.flatMap { BenchmarkProbe.nativeTextMatches($0) }
+                                    ?? (NSApp.windows.first(where: { $0.isVisible })?.contentView
+                                        .map { view in
+                                            descendants(view).compactMap { $0 as? NSTextView }
+                                                .contains { after != nil && $0.string == after }
+                                        } ?? false)
+                                let report: [String: Any] = [
+                                    "caches": caches,
+                                    "activeTextUnchanged": before != nil && before == after,
+                                    "nativeTextMatches": nativeMatches,
+                                    "activeTextBytes": after?.utf8.count ?? 0,
+                                ]
+                                do {
+                                    let data = try JSONSerialization.data(
+                                        withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                                    try data.write(to: URL(fileURLWithPath: destination), options: .atomic)
+                                } catch { print("MEMORY PRESSURE PROBE FAILED: \(error)") }
+                            }
+                        }
                         if command == "project", let destination, destination.hasPrefix("/"), let model {
                             let selected = model.selected
                             Task {

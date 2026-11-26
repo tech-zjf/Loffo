@@ -9,10 +9,11 @@ public struct EditorSyntaxTheme: Sendable, Equatable {
 
     public static let standard = EditorSyntaxTheme(colors: [
         .keyword: "AD1AF2", .string: "337B5C", .comment: "0D6E21", .number: "E07A20",
-        .type: "336699", .importPath: "D61F27",
+        .type: "000950", .importPath: "D61F27", .functionCall: "850023", .constructor: "006270",
+        .parameter: "4470F6",
     ])
 
-    public init(colors: [SyntaxKind: String], foreground: String = "10111A") {
+    public init(colors: [SyntaxKind: String], foreground: String = "000950") {
         self.colors = colors
         foregroundHex = foreground
     }
@@ -22,7 +23,7 @@ public struct EditorSyntaxTheme: Sendable, Equatable {
     }
 
     public func hexColor(for kind: SyntaxKind) -> String {
-        colors[kind] ?? Self.standard.colors[kind] ?? "10111A"
+        colors[kind] ?? Self.standard.colors[kind] ?? "000950"
     }
 
     public var hexForeground: String { foregroundHex }
@@ -37,7 +38,7 @@ public struct EditorSyntaxTheme: Sendable, Equatable {
         else { throw ThemeImportError.invalidTheme }
 
         var result = Self.standard.colors
-        var defaultForeground = "10111A"
+        var defaultForeground = "000950"
         if let settings = root["settings"] as? [String: Any],
             let value = settings["foreground"] as? String, Self.isHexColor(value)
         {
@@ -63,7 +64,12 @@ public struct EditorSyntaxTheme: Sendable, Equatable {
                 if scope.contains("numeric") || scope.contains("number") { result[.number] = foreground }
                 if scope.contains("entity.name.type") || scope.contains("support.type") {
                     result[.type] = foreground
+                    result[.constructor] = foreground
                 }
+                if scope.contains("entity.name.function") || scope.contains("support.function") {
+                    result[.functionCall] = foreground
+                }
+                if scope.contains("variable.parameter") { result[.parameter] = foreground }
             }
         }
         guard !tokenColors.isEmpty else { throw ThemeImportError.invalidTheme }

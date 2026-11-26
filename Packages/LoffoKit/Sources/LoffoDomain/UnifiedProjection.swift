@@ -21,12 +21,31 @@ public struct UnifiedProjection: Sendable {
     public let hunkStarts: [Int]
 
     public init(result: DiffResult, syntax: [SyntaxSpan] = [], context: Int = 3, expanded: Bool = false) {
+        self.init(result: result, syntax: syntax, context: context, expanded: expanded, check: {})
+    }
+
+    public static func cancellable(
+        result: DiffResult, syntax: [SyntaxSpan] = [], context: Int = 3, expanded: Bool = false
+    ) throws -> Self {
+        try Self(result: result, syntax: syntax, context: context, expanded: expanded) {
+            try Task.checkCancellation()
+        }
+    }
+
+    private init<E: Error>(
+        result: DiffResult, syntax: [SyntaxSpan], context: Int, expanded: Bool,
+        check: () throws(E) -> Void
+    ) throws(E) {
+        try check()
         let lines = result.lines
-        let hasChanges = result.added + result.removed > 0
+        var hasChanges = false
         var included = Set<Int>()
         var rawHunkStarts: [Int] = []
         var lastHunkEnd = -1
-        for index in lines.indices where lines[index].kind != .context {
+        for index in lines.indices {
+            if index.isMultiple(of: 1_024) { try check() }
+            guard lines[index].kind != .context else { continue }
+            hasChanges = true
             let lower = max(0, index - context)
             let upper = min(lines.count - 1, index + context)
             if lower > lastHunkEnd + 1 { rawHunkStarts.append(lower) }
@@ -36,7 +55,9 @@ public struct UnifiedProjection: Sendable {
         if expanded || !hasChanges {
             included.formUnion(lines.indices)
         } else {
-            for index in lines.indices where lines[index].kind != .context {
+            for index in lines.indices {
+                if index.isMultiple(of: 1_024) { try check() }
+                guard lines[index].kind != .context else { continue }
                 included.formUnion(max(0, index - context)...min(lines.count - 1, index + context))
             }
         }
@@ -47,8 +68,11 @@ public struct UnifiedProjection: Sendable {
         var previous = -2
         var hunkStarts: [Int] = []
         let ordered = syntax.sorted { $0.range.location < $1.range.location }
+        try check()
         var cursor = 0
+        var text = ""
         for index in lines.indices {
+            if index.isMultiple(of: 1_024) { try check() }
             let line = lines[index]
             let display = line.text.hasSuffix("\n") ? line.text : line.text + "\n"
             let length = display.utf16.count
@@ -59,13 +83,19 @@ public struct UnifiedProjection: Sendable {
                 rows.append(
                     PresentedLine(line: nil, heading: "@@ −\(line.oldNumber ?? 0) +\(line.newNumber ?? 0) @@")
                 )
+                text += "\n"
                 displayOffset += 1
             }
             if expanded && rawHunkStartSet.contains(index) { hunkStarts.append(rows.count) }
             rows.append(PresentedLine(line: line))
-            while cursor < ordered.count && NSMaxRange(ordered[cursor].range) <= rawOffset { cursor += 1 }
+            text += display
+            while cursor < ordered.count && NSMaxRange(ordered[cursor].range) <= rawOffset {
+                if cursor.isMultiple(of: 1_024) { try check() }
+                cursor += 1
+            }
             var spanIndex = cursor
             while spanIndex < ordered.count && ordered[spanIndex].range.location < rawOffset + length {
+                if spanIndex.isMultiple(of: 1_024) { try check() }
                 let range = NSIntersectionRange(
                     ordered[spanIndex].range, NSRange(location: rawOffset, length: length))
                 if range.length > 0 {
@@ -81,7 +111,7 @@ public struct UnifiedProjection: Sendable {
             previous = index
         }
         self.rows = rows
-        text = rows.map(\.text).joined()
+        self.text = text
         self.syntax = spans
         self.hunkStarts = hunkStarts
     }

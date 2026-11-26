@@ -19,11 +19,33 @@ public enum TextLimits {
         try validate(text, byteLimit: 2 * bytes + 2, lineLimit: 2 * lines + 1)
     }
 
+    /// Validate the complete unified output without allocating a second full-size string.
+    /// Each row is terminated exactly as it will be by UnifiedProjection.
+    public static func validatePresentationRows<C: Collection>(_ rows: C) throws where C.Element == String {
+        try Task.checkCancellation()
+        let byteLimit = 2 * bytes + 2
+        var total = 0
+        for (index, row) in rows.enumerated() {
+            if index.isMultiple(of: 1_024) { try Task.checkCancellation() }
+            let length = row.utf8.count + (row.hasSuffix("\n") ? 0 : 1)
+            guard length <= byteLimit - total else { throw WorkspaceFailure.tooLarge }
+            total += length
+        }
+        try validateCharacters(
+            rows.lazy.map { $0.hasSuffix("\n") ? $0 : $0 + "\n" }, lineLimit: 2 * lines + 1)
+    }
+
     private static func validate(_ text: String, byteLimit: Int, lineLimit: Int) throws {
         guard text.utf8.count <= byteLimit else { throw WorkspaceFailure.tooLarge }
+        try validateCharacters(CollectionOfOne(text), lineLimit: lineLimit)
+    }
+
+    private static func validateCharacters<S: Sequence>(_ chunks: S, lineLimit: Int) throws
+    where S.Element == String {
         var count = 1
         var width = 0
-        for character in text {
+        for (index, character) in chunks.lazy.flatMap({ $0 }).enumerated() {
+            if index.isMultiple(of: 4_096) { try Task.checkCancellation() }
             if character.isNewline {
                 count += 1
                 width = 0

@@ -18,9 +18,16 @@ public struct ProjectFile: Identifiable, Sendable, Hashable {
     public var id: String { path }
     public let path: String
     public let changeKind: FileChangeKind?
-    public init(path: String, changeKind: FileChangeKind? = nil) {
+    public let hasModeChange: Bool
+    public let hasUnsupportedGitType: Bool
+    public init(
+        path: String, changeKind: FileChangeKind? = nil, hasModeChange: Bool = false,
+        hasUnsupportedGitType: Bool = false
+    ) {
         self.path = path
         self.changeKind = changeKind
+        self.hasModeChange = hasModeChange
+        self.hasUnsupportedGitType = hasUnsupportedGitType
     }
 }
 
@@ -59,10 +66,13 @@ public struct FileListing: Sendable {
     public let files: [ProjectFile]
     public let isLimited: Bool
     public let usesGitIgnore: Bool
-    public init(files: [ProjectFile], isLimited: Bool, usesGitIgnore: Bool) {
+    /// Full captured commit ID for a changes listing, when the provider supports Git revisions.
+    public let revision: String?
+    public init(files: [ProjectFile], isLimited: Bool, usesGitIgnore: Bool, revision: String? = nil) {
         self.files = files
         self.isLimited = isLimited
         self.usesGitIgnore = usesGitIgnore
+        self.revision = revision
     }
 }
 
@@ -88,7 +98,9 @@ public enum WorkspaceFailure: Error, Sendable, LocalizedError {
     }
 }
 
-public enum SyntaxKind: Sendable, Hashable { case keyword, string, comment, number, type, importPath }
+public enum SyntaxKind: Sendable, Hashable {
+    case keyword, string, comment, number, type, importPath, functionCall, constructor, parameter
+}
 public struct SyntaxSpan: Sendable {
     public let range: NSRange
     public let kind: SyntaxKind
@@ -98,17 +110,46 @@ public struct SyntaxSpan: Sendable {
     }
 }
 
+public struct SyntaxHighlights: Sendable {
+    public let spans: [SyntaxSpan]
+    public let isLimited: Bool
+    public init(spans: [SyntaxSpan], isLimited: Bool) {
+        self.spans = spans
+        self.isLimited = isLimited
+    }
+}
+
 public protocol SyntaxProviding: Sendable {
     func highlights(for snapshot: TextSnapshot) async -> [SyntaxSpan]
+    func highlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights
+    /// A transient input must not be retained for incremental parsing after the call returns.
+    func transientHighlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights
+}
+
+extension SyntaxProviding {
+    public func highlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights {
+        SyntaxHighlights(spans: await highlights(for: snapshot), isLimited: false)
+    }
+
+    /// Providers that retain regular inputs must override this method to release transient inputs.
+    public func transientHighlightsWithStatus(for snapshot: TextSnapshot) async -> SyntaxHighlights {
+        await highlightsWithStatus(for: snapshot)
+    }
 }
 
 public protocol WorkspaceReading: Sendable {
+    func invalidateRepositoryScans(in root: URL)
     func changes(in root: URL) async throws -> FileListing
+    func repositoryObservationRoots(in root: URL) async throws -> [URL]
+    func repositoryObservationFiles(in root: URL) async throws -> [URL]
+    func revalidateRepositoryObservationFiles(in root: URL) async throws -> [URL]
     func history(in root: URL, path: String) async throws -> [FileCommit]
     func branch(in root: URL) async throws -> String
     func validateComparison(in root: URL, path: String) async throws
     func files(in root: URL) async throws -> FileListing
     func read(_ url: URL) async throws -> TextSnapshot
+    func readDeletedOrCurrent(_ url: URL) async throws -> TextSnapshot
+    func read(in root: URL, path: String, allowMissing: Bool) async throws -> TextSnapshot
     func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput
 }
 
@@ -116,21 +157,42 @@ public struct ComparisonInput: Sendable {
     public let before: String
     public let after: String
     public let label: String
-    public init(before: String, after: String, label: String) {
+    public let revision: String?
+    public init(before: String, after: String, label: String, revision: String? = nil) {
         self.before = before
         self.after = after
         self.label = label
+        self.revision = revision
     }
 }
 
-@MainActor public protocol ObservationLease: AnyObject { func cancel() }
+@MainActor public protocol ObservationLease: AnyObject {
+    var isActive: Bool { get }
+    func retry()
+    func cancel()
+}
+/// File content events are only emitted when every event in a batch is a regular-file modification.
+/// Unknown, structural, dropped or coalesced events require a full rescan.
+public enum WorkspaceChange: Sendable {
+    case fileContents([URL])
+    case rescan
+}
+extension ObservationLease { public func retry() {} }
 @MainActor public protocol FileObserving: AnyObject {
     func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
         -> any ObservationLease
     func observe(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) -> any ObservationLease
+    func observeWorkspaceChanges(
+        _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
+    ) -> any ObservationLease
 }
 
 extension FileObserving {
+    public func observeWorkspaceChanges(
+        _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
+    ) -> any ObservationLease {
+        observeWorkspace(url) { onChange(.rescan) }
+    }
     public func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
         -> any ObservationLease
     {
@@ -139,6 +201,17 @@ extension FileObserving {
 }
 
 extension WorkspaceReading {
+    public func invalidateRepositoryScans(in root: URL) {}
+    public func repositoryObservationRoots(in root: URL) async throws -> [URL] { [] }
+    public func repositoryObservationFiles(in root: URL) async throws -> [URL] { [] }
+    public func revalidateRepositoryObservationFiles(in root: URL) async throws -> [URL] {
+        try await repositoryObservationFiles(in: root)
+    }
+    public func readDeletedOrCurrent(_ url: URL) async throws -> TextSnapshot { try await read(url) }
+    public func read(in root: URL, path: String, allowMissing: Bool) async throws -> TextSnapshot {
+        let url = root.appendingPathComponent(path)
+        return try await allowMissing ? readDeletedOrCurrent(url) : read(url)
+    }
     public func changes(in root: URL) async throws -> FileListing { try await files(in: root) }
     public func history(in root: URL, path: String) async throws -> [FileCommit] { [] }
     public func branch(in root: URL) async throws -> String { "HEAD" }

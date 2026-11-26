@@ -9,6 +9,32 @@ import Testing
 @testable import LoffoEditorUI
 @testable import LoffoFeatures
 
+@Test @MainActor func pathTooltipCardFitsShortAndLongPaths() {
+    _ = NSApplication.shared
+    for path in ["Packages/LoffoKit/Package.resolved", String(repeating: "long-segment/", count: 100)] {
+        let host = NSHostingView(rootView: PathTooltipCard(text: path))
+        let size = host.fittingSize
+        #expect(size.width >= 100 && size.width <= 320)
+        #expect(size.height >= 30 && size.height <= 174)
+    }
+}
+
+@Test @MainActor func workspaceKeepsNativeWindowControlsVisible() throws {
+    _ = NSApplication.shared
+    let window = NSWindow(
+        contentRect: NSRect(x: 50, y: 50, width: 960, height: 540),
+        styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let view = VisibilityView { _ in }
+    window.contentView = view
+    defer { window.close() }
+    for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+        let button = try #require(window.standardWindowButton(type))
+        #expect(!button.isHidden)
+        #expect(button.isEnabled)
+    }
+}
+
 @Test @MainActor func narrowWorkspaceKeepsNativeTextAndGutterInsideTheirColumn() async throws {
     _ = NSApplication.shared
     let folder = try TemporaryFolder()
@@ -48,10 +74,14 @@ import Testing
         try await Task.sleep(for: .milliseconds(10))
     }
     host.layoutSubtreeIfNeeded()
-    try await Task.sleep(for: .milliseconds(100))
+    let expected = "export const greeting = \"你好 👩🏽‍💻 مرحبا\";\n"
+    for _ in 0..<200 {
+        if viewDescendants(host).compactMap({ $0 as? NSTextView }).first?.string == expected { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
     let readingText = try #require(viewDescendants(host).compactMap { $0 as? NSTextView }.first)
     #expect(readingText.accessibilityLabel() == path)
-    #expect(readingText.string.utf8.elementsEqual("export const greeting = \"你好 👩🏽‍💻 مرحبا\";\n".utf8))
+    #expect(readingText.string.utf8.elementsEqual(expected.utf8))
     let readingSurface = try #require(readingText.enclosingScrollView?.superview as? EditorSurface)
     #expect(readingSurface.convert(readingSurface.bounds, to: host).minX >= 348)
     let readingScroll = try #require(readingText.enclosingScrollView)

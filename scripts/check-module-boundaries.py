@@ -8,11 +8,11 @@ root = Path(__file__).resolve().parents[1]
 allowed = {
     'LoffoDomain': {'Foundation'},
     'LoffoDocument': {
-        'Foundation', 'OSLog', 'LoffoDomain', 'TreeSitter', 'TreeSitterTypeScript', 'TreeSitterTSX',
+        'Foundation', 'OSLog', 'os', 'LoffoDomain', 'TreeSitter', 'TreeSitterTypeScript', 'TreeSitterTSX',
         'TreeSitterRust', 'TreeSitterJava', 'TreeSitterSwift',
     },
     'LoffoDiff': {'Foundation', 'OSLog', 'LoffoDomain'},
-    'LoffoInfrastructure': {'Foundation', 'CoreServices', 'os', 'LoffoDomain', 'LoffoDocument'},
+    'LoffoInfrastructure': {'Foundation', 'CoreServices', 'Darwin', 'os', 'LoffoDomain', 'LoffoDocument'},
     'LoffoDesignSystem': {'SwiftUI'},
     'LoffoEditorUI': {'AppKit', 'OSLog', 'SwiftUI', 'Foundation', 'LoffoDomain', 'LoffoDesignSystem'},
     'LoffoFeatures': {

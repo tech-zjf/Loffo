@@ -22,6 +22,9 @@ public struct WorkspaceView: View {
     @State private var inspectorDragOrigin: CGFloat?
     @State private var syntaxTheme = EditorSyntaxTheme.standard
     @State private var themeImportFailed = false
+    @State private var isFileNameHovered = false
+    @StateObject private var copyPathFeedback = CopyPathFeedback()
+    @FocusState private var copyPathFocused: Bool
     public init(model: WorkspaceModel) {
         self.model = model
         if let json = UserDefaults.standard.string(forKey: "Loffo.editorThemeJSON"),
@@ -60,13 +63,17 @@ public struct WorkspaceView: View {
         .onChange(of: model.fileTreeRevision) { rebuildVisibleFileRows() }
         .onChange(of: filter) { rebuildVisibleFileRows() }
         .onChange(of: model.selected, initial: true) {
+            copyPathFeedback.reset()
             let ancestors = FileTreeNode.ancestors(of: model.selected)
             if !ancestors.isSubset(of: expanded) {
                 expanded.formUnion(ancestors)
                 rebuildVisibleFileRows()
             }
         }
-        .onDisappear { model.close() }
+        .onDisappear {
+            copyPathFeedback.reset()
+            model.close()
+        }
         .alert(L10n.text("Could not import theme"), isPresented: $themeImportFailed) {
             Button(L10n.text("OK"), role: .cancel) {}
         } message: {
@@ -77,7 +84,7 @@ public struct WorkspaceView: View {
 
     private var navigationRail: some View {
         VStack(spacing: 6) {
-            BrandMark().offset(y: 4).frame(height: LoffoMetrics.header).padding(.bottom, 8)
+            BrandMark().frame(height: LoffoMetrics.header, alignment: .bottom).padding(.bottom, 8)
             railButton("folder", title: "Files", active: !isSidebarCollapsed && !model.showsDiff) {
                 selectSidebar(diff: false)
             }
@@ -119,8 +126,40 @@ public struct WorkspaceView: View {
             .contentShape(Rectangle())
             .background(
                 active ? LoffoPalette.selection.opacity(0.65) : .clear,
-                in: RoundedRectangle(cornerRadius: 8))
-        }.buttonStyle(.plain).help(L10n.text(title)).accessibilityLabel(L10n.text(title))
+                in: RoundedRectangle(cornerRadius: 8)
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if icon == "branch", let badge = changesBadge {
+                    Text(badge).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white)
+                        .padding(.horizontal, 4).frame(minWidth: 16, minHeight: 16)
+                        .background(LoffoPalette.accent, in: Capsule())
+                        .offset(x: 2, y: 2).allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+        }.buttonStyle(.plain).help(icon == "branch" ? changesIndicatorDescription : L10n.text(title))
+            .accessibilityLabel(L10n.text(title))
+            .accessibilityValue(icon == "branch" ? changesIndicatorDescription : "")
+    }
+
+    var changesBadge: String? {
+        switch model.changesIndicator {
+        case .count(let count): count > 99 ? "99+" : String(count)
+        case .checking:
+            model.previousChangesBadgeCount.map { $0 > 99 ? "99+" : String($0) }
+        case .unavailable: "!"
+        case .hidden, .clean: nil
+        }
+    }
+
+    private var changesIndicatorDescription: String {
+        switch model.changesIndicator {
+        case .hidden: L10n.text("Changes")
+        case .checking: L10n.text("Checking for changes")
+        case .unavailable: L10n.text("Changes unavailable")
+        case .clean: L10n.text("No changes")
+        case .count(let count):
+            L10n.format(count == 1 ? "%ld file changed" : "%ld files changed", count)
+        }
     }
 
     private var repositoryHeader: some View {
@@ -143,9 +182,14 @@ public struct WorkspaceView: View {
                         .background(.black.opacity(0.018), in: Capsule())
                 }
                 HStack(spacing: 6) {
-                    Circle().fill(model.error == nil ? LoffoPalette.added : .orange).frame(
-                        width: 4, height: 4)
-                    Text(L10n.text(model.isUpdating ? "Updating" : "Watching files"))
+                    Circle()
+                        .fill(model.error == nil && model.monitoringAvailable ? LoffoPalette.added : .orange)
+                        .frame(width: 4, height: 4)
+                    Text(
+                        L10n.text(
+                            !model.monitoringAvailable
+                                ? "File monitoring unavailable"
+                                : (model.isUpdating ? "Updating" : "Watching files")))
                 }.font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
             }
             Spacer(minLength: 0)
@@ -176,14 +220,33 @@ public struct WorkspaceView: View {
                             .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                             .padding(12).background(LoffoPalette.selection)
                     }
+                    if model.syntaxLimited {
+                        Label(
+                            L10n.text("Syntax highlighting is incomplete for this file."),
+                            systemImage: "exclamationmark.circle"
+                        ).font(.system(size: 11)).foregroundStyle(LoffoPalette.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12).background(LoffoPalette.selection)
+                    }
                     if let presentation = model.presentation {
                         if model.showsDiff {
                             HStack(spacing: 8) {
-                                Text(L10n.text("HEAD → Working tree"))
-                                    .padding(.horizontal, 10).padding(.vertical, 4)
-                                    .background(.black.opacity(0.018), in: Capsule())
-                                Circle().fill(LoffoPalette.added).frame(width: 4, height: 4)
-                                Text(L10n.text(model.isUpdating ? "Updating" : "Live"))
+                                Text(
+                                    L10n.text(
+                                        model.isInitialComparison
+                                            ? "Initial → Working tree" : "HEAD → Working tree")
+                                )
+                                .padding(.horizontal, 10).padding(.vertical, 4)
+                                .background(.black.opacity(0.018), in: Capsule())
+                                if model.error == nil && model.changesError == nil
+                                    && model.monitoringAvailable
+                                {
+                                    Circle().fill(LoffoPalette.added).frame(width: 4, height: 4)
+                                    Text(
+                                        L10n.text(
+                                            model.isUpdating || model.isRefreshingFiles ? "Updating" : "Live")
+                                    )
+                                }
                                 Spacer()
                             }.font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
                                 .padding(.horizontal, 20).frame(height: 31, alignment: .top).offset(y: -4)
@@ -191,6 +254,11 @@ public struct WorkspaceView: View {
                         CodeEditor(
                             presentation: presentation, navigation: model.navigation,
                             accessibilityName: model.selected ?? L10n.text("Code"), syntaxTheme: syntaxTheme)
+                    } else if model.showsDiff, let changesError = model.changesError {
+                        ContentUnavailableView(
+                            L10n.text("Changes unavailable"), systemImage: "exclamationmark.triangle",
+                            description: Text(changesError)
+                        ).frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if model.selected != nil && model.error == nil {
                         // A cold read is pending, not a failed preview. Keep the content surface stable.
                         Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -263,16 +331,6 @@ public struct WorkspaceView: View {
                     .task { filterFocused = true }
                     .onSubmit { openFirstMatch() }
                     .onExitCommand { dismissFilter() }
-            }
-            if model.showsDiff {
-                HStack(spacing: 6) {
-                    Text(
-                        L10n.format(
-                            model.changedFiles.count == 1 ? "%ld file changed" : "%ld files changed",
-                            model.changedFiles.count)
-                    ).font(.system(size: 11))
-                    Spacer(minLength: 4)
-                }.font(.system(size: 10)).padding(.vertical, 8)
             }
             ScrollViewReader { proxy in
                 LoffoScrollView(onScrollView: { fileTreeScrollView = $0 }) {
@@ -382,7 +440,16 @@ public struct WorkspaceView: View {
                             RoundedRectangle(cornerRadius: 9).fill(
                                 model.selected == node.path ? LoffoPalette.selection : .clear)
                         }
-                    }.contentShape(Rectangle())
+                    }
+                    .overlay(alignment: .leading) {
+                        HStack(spacing: 0) {
+                            ForEach(0..<min(row.depth, 5), id: \.self) { _ in
+                                LoffoPalette.border.frame(width: 0.5)
+                                    .frame(width: 20, alignment: .leading)
+                            }
+                        }.padding(.leading, 4).allowsHitTesting(false).accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
             }.buttonStyle(.plain).modifier(DelayedPathTooltip(text: node.path))
             .accessibilityLabel(node.path)
             .accessibilityValue(
@@ -451,10 +518,39 @@ public struct WorkspaceView: View {
                     .padding(.horizontal, 8).frame(height: 26)
                     .background(Color.purple.opacity(0.055), in: RoundedRectangle(cornerRadius: 4))
             }
-            Text(model.selected ?? L10n.text("Your code, in focus.")).font(.system(size: 13, weight: .medium))
-                .lineLimit(1).truncationMode(.middle)
-                .help(model.selected ?? "").accessibilityLabel(model.selected ?? L10n.text("Code"))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 5) {
+                Text(model.selected ?? L10n.text("Your code, in focus."))
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1).truncationMode(.middle)
+                    .help(model.selected ?? "").accessibilityLabel(model.selected ?? L10n.text("Code"))
+                    .layoutPriority(1)
+                if let path = model.selected {
+                    Button {
+                        copyPathFeedback.copy(path) { value in
+                            NSPasteboard.general.clearContents()
+                            return NSPasteboard.general.setString(value, forType: .string)
+                        }
+                    } label: {
+                        Image(systemName: copyPathFeedback.isCopied ? "checkmark" : "square.on.square")
+                            .font(.system(size: 11))
+                            .foregroundStyle(
+                                copyPathFeedback.isCopied ? LoffoPalette.added : LoffoPalette.secondary
+                            )
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused($copyPathFocused)
+                    .opacity(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused ? 1 : 0)
+                    .allowsHitTesting(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused)
+                    .help(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
+                    .accessibilityLabel(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onHover { isFileNameHovered = $0 }
             Spacer(minLength: compact ? 0 : 8)
             if !model.showsDiff && !compact {
                 Label(L10n.text("Read only"), systemImage: "lock").font(.system(size: 11))
@@ -475,8 +571,8 @@ public struct WorkspaceView: View {
                     }
                 }.buttonStyle(.plain).frame(width: compact ? 28 : 96)
                     .accessibilityLabel(L10n.text("History")).help(L10n.text("History"))
-                    .popover(isPresented: $showsHistory) {
-                        AppPopoverPanel { historyPanel.padding(18).frame(width: 300) }
+                    .loffoPopover(isPresented: $showsHistory) {
+                        historyPanel.padding(18).frame(width: 300)
                     }
                 Button {
                     showsOutline.toggle()
@@ -488,23 +584,21 @@ public struct WorkspaceView: View {
                     }
                 }.buttonStyle(.plain).frame(width: compact ? 28 : 96)
                     .accessibilityLabel(L10n.text("Outline")).help(L10n.text("Outline"))
-                    .popover(isPresented: $showsOutline) {
-                        AppPopoverPanel {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text(L10n.text("File outline")).fontWeight(.medium)
-                                ForEach(outline, id: \.self) {
-                                    Text($0).font(.system(size: 11, design: .monospaced)).textSelection(
-                                        .enabled)
-                                }
-                                if outline.isEmpty {
-                                    Text(L10n.text("No declarations in this file")).foregroundStyle(
-                                        LoffoPalette.secondary)
-                                }
-                            }.padding(18).frame(width: 360)
-                        }
+                    .loffoPopover(isPresented: $showsOutline) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(L10n.text("File outline")).fontWeight(.medium)
+                            ForEach(outline, id: \.self) {
+                                Text($0).font(.system(size: 11, design: .monospaced)).textSelection(
+                                    .enabled)
+                            }
+                            if outline.isEmpty {
+                                Text(L10n.text("No declarations in this file")).foregroundStyle(
+                                    LoffoPalette.secondary)
+                            }
+                        }.padding(18).frame(width: 360)
                     }
             }
-            if model.showsDiff {
+            if model.showsDiff && model.changesError == nil {
                 HStack(spacing: 10) {
                     Button {
                         model.navigateHunk(1)
@@ -581,25 +675,6 @@ public struct WorkspaceView: View {
                             LoffoPalette.removedBackground, in: Capsule())
                 }.font(.system(size: 11))
                 VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(L10n.text("File")).font(.system(size: 11))
-                        HStack {
-                            Text(model.selected ?? "").lineLimit(1).truncationMode(.middle).help(
-                                model.selected ?? "")
-                            Spacer()
-                            Button {
-                                if let path = model.selected {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(path, forType: .string)
-                                }
-                            } label: {
-                                Image(systemName: "square.on.square")
-                            }
-                            .buttonStyle(.plain).help(L10n.text("Copy path")).accessibilityLabel(
-                                L10n.text("Copy path"))
-                        }.font(.system(size: 11)).padding(8)
-                            .background(.black.opacity(0.018), in: RoundedRectangle(cornerRadius: 6))
-                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(L10n.text("Review")).font(.system(size: 11))
                         HStack {
@@ -754,62 +829,89 @@ private struct SidebarSelection: Equatable {
     let diff: Bool
 }
 
-private struct AppPopoverPanel<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .background(LoffoPalette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius))
-            .overlay {
-                RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius)
-                    .strokeBorder(LoffoPalette.border.opacity(0.55), lineWidth: 0.75)
-            }
-            .presentationBackground(LoffoPalette.surface)
-            .presentationCornerRadius(LoffoMetrics.cardRadius)
-    }
-}
-
 private struct DelayedPathTooltip: ViewModifier {
     let text: String
     @State private var isHovering = false
+    @State private var isHoveringTooltip = false
     @State private var isVisible = false
     @State private var showTask: Task<Void, Never>?
+    @State private var dismissTask: Task<Void, Never>?
 
     func body(content: Content) -> some View {
         content
             .onHover { hovering in
                 isHovering = hovering
                 showTask?.cancel()
-                isVisible = false
-                guard hovering, text.count > 28 else { return }
+                dismissTask?.cancel()
+                guard hovering else {
+                    scheduleDismiss()
+                    return
+                }
+                guard !isVisible else { return }
                 showTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(300))
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
                     guard !Task.isCancelled, isHovering else { return }
                     isVisible = true
                 }
             }
-            .overlay(alignment: .topLeading) {
-                if isVisible {
-                    Text(text)
-                        .font(.system(size: 11))
-                        .foregroundStyle(LoffoPalette.text)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 320, alignment: .leading)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .background(LoffoPalette.surface, in: RoundedRectangle(cornerRadius: 7))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 7)
-                                .strokeBorder(LoffoPalette.border, lineWidth: 0.75)
-                        }
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
-                        .offset(x: 8, y: 4)
-                        .zIndex(100)
-                        .allowsHitTesting(false)
-                }
+            .loffoPopover(isPresented: $isVisible, arrowEdge: .trailing) {
+                PathTooltipCard(text: text)
+                    .onHover { hovering in
+                        isHoveringTooltip = hovering
+                        dismissTask?.cancel()
+                        if !hovering { scheduleDismiss() }
+                    }
             }
-            .onDisappear { showTask?.cancel() }
+            .onChange(of: isVisible) {
+                if !isVisible { isHoveringTooltip = false }
+            }
+            .onAppear {
+                #if DEBUG
+                    if ProcessInfo.processInfo.environment["LOFFO_SMOKE_TOOLTIP"] == text {
+                        isVisible = true
+                    }
+                #endif
+            }
+            .onDisappear {
+                showTask?.cancel()
+                dismissTask?.cancel()
+            }
+    }
+
+    private func scheduleDismiss() {
+        dismissTask?.cancel()
+        dismissTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            if !isHovering && !isHoveringTooltip { isVisible = false }
+        }
+    }
+}
+
+struct PathTooltipCard: View {
+    let text: String
+
+    private var contentSize: CGSize {
+        let font = NSFont.systemFont(ofSize: 11)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font]
+        let width = min(300, max(80, ceil((text as NSString).size(withAttributes: attributes).width)))
+        let bounds = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: attributes)
+        return CGSize(width: width, height: min(160, max(16, ceil(bounds.height))))
+    }
+
+    var body: some View {
+        let size = contentSize
+        ScrollView(.vertical) {
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(LoffoPalette.text)
+                .frame(width: size.width, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(width: size.width, height: size.height)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .fixedSize()
     }
 }

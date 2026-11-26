@@ -112,7 +112,28 @@ import SwiftUI
         arrangement = "best-effort tiling; inspect actual frames, overlap and occlusion in this report"
     }
 
-    private static func record(to destination: URL) {
+    #if DEBUG
+        static func captureNow(to destination: URL) {
+            guard enabled else { return }
+            record(
+                to: destination,
+                note: "On-demand observation; native readiness is not frame-presented evidence.")
+        }
+
+        static func nativeTextMatches(_ model: WorkspaceModel) -> Bool? {
+            guard enabled, let view = entries.first(where: { $0.model === model })?.window?.contentView else {
+                return nil
+            }
+            guard let text = model.presentation?.text else { return false }
+            return descendants(view).compactMap { $0 as? NSTextView }.contains { $0.string == text }
+        }
+    #endif
+
+    private static func record(
+        to destination: URL,
+        note: String =
+            "One observation after a 30-second settling period; native readiness is not frame-presented evidence. Overlap sums are diagnostic, not OS-wide visible-area measurements."
+    ) {
         let live = entries.filter { $0.model != nil }
         let windows = live.compactMap(\.window).filter { $0.isVisible && $0.contentView != nil }
         let reports: [[String: Any]] = live.compactMap { entry in
@@ -167,8 +188,7 @@ import SwiftUI
                     "maximumFramesPerSecond": $0.maximumFramesPerSecond,
                 ] as [String: Any]
             },
-            "note":
-                "One observation after a 30-second settling period; native readiness is not frame-presented evidence. Overlap sums are diagnostic, not OS-wide visible-area measurements.",
+            "note": note,
         ]
         do {
             let data = try JSONSerialization.data(

@@ -39,7 +39,9 @@ public struct CodeEditor: NSViewRepresentable {
         text.font = EditorTypography.code
         text.textContainerInset = NSSize(width: 20, height: 4)
         text.isHorizontallyResizable = true
-        text.isVerticallyResizable = true
+        // Line height is fixed; size the scroll document explicitly instead of asking TextKit
+        // to lay out every paragraph to discover its height.
+        text.isVerticallyResizable = false
         text.minSize = NSSize(width: 0, height: 0)
         text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         text.textContainer?.containerSize = text.maxSize
@@ -65,14 +67,21 @@ public struct CodeEditor: NSViewRepresentable {
         private weak var surface: EditorSurface?
         private var current: CodePresentation?
         private var pending: CodePresentation?
+        private var syntaxIndex = SyntaxSpanIndex([])
+        private var lineStarts: [Int] = [0]
+        private var relocatedLine: Int?
+        private var relocating = false
+        private var latestRequestedID: UUID?
         private var syntaxTheme = EditorSyntaxTheme.standard
         private var applying = false
         private var decorating = false
+        private var decoratedRange: NSRange?
         private var lastNavigation: UUID?
         private let signposter = OSSignposter(subsystem: "app.loffo", category: "Editor")
         private var observer: NSObjectProtocol?
+        private var resizeObserver: NSObjectProtocol?
 
-        fileprivate func connect(_ text: TrackingTextView, surface: EditorSurface) {
+        func connect(_ text: TrackingTextView, surface: EditorSurface) {
             let scroll = surface.scroll
             let ruler = surface.gutter
             self.surface = surface
@@ -81,15 +90,23 @@ public struct CodeEditor: NSViewRepresentable {
             self.ruler = ruler
             text.selectionEnded = { [weak self] in self?.drain() }
             scroll.contentView.postsBoundsChangedNotifications = true
+            scroll.contentView.postsFrameChangedNotifications = true
             observer = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
                 object: scroll.contentView, queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
+                    self?.relocateViewport()
                     self?.decorate()
                     self?.ruler?.needsDisplay = true
                     self?.surface?.needsDisplay = true
                 }
+            }
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: scroll.contentView, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.decorate() }
             }
         }
         fileprivate func name(_ name: String) { textView?.setAccessibilityLabel(name) }
@@ -104,12 +121,18 @@ public struct CodeEditor: NSViewRepresentable {
             textView.needsDisplay = true
             ruler?.needsDisplay = true
         }
-        fileprivate func submit(_ value: CodePresentation, theme: EditorSyntaxTheme) {
+        func submit(_ value: CodePresentation, theme: EditorSyntaxTheme) {
             if syntaxTheme != theme {
                 syntaxTheme = theme
+                decoratedRange = nil
                 if current?.id == value.id { decorate() }
             }
-            guard current?.id != value.id, pending?.id != value.id else { return }
+            latestRequestedID = value.id
+            if current?.id == value.id {
+                pending = nil
+                return
+            }
+            guard pending?.id != value.id else { return }
             pending = value
             drain()
         }
@@ -120,32 +143,43 @@ public struct CodeEditor: NSViewRepresentable {
             let old = current?.text ?? ""
             let scrollY = Double(scrollView?.contentView.bounds.minY ?? 0)
             Task { [weak self] in
-                let (patch, restoredY, lineCount, numbers) = await Task.detached(priority: .userInitiated) {
+                let (patch, restoredY, starts, index) = await Task.detached(
+                    priority: .userInitiated
+                ) {
                     let patch = TextPatch.between(old, next.text)
                     let anchor = ScrollAnchor.capture(text: old, y: scrollY)
-                    let lineCount = next.text.reduce(1) { $1.isNewline ? $0 + 1 : $0 }
-                    let numbers = next.diff?.lines.map {
-                        ($0.kind == .added ? "+ " : $0.kind == .removed ? "− " : "  ")
-                            + String($0.newNumber ?? $0.oldNumber ?? 0)
+                    var starts = [0]
+                    var offset = 0
+                    for character in next.text {
+                        offset += character.utf16.count
+                        if character.isNewline { starts.append(offset) }
                     }
-                    return (patch, anchor.restoredY(in: next.text, patch: patch), lineCount, numbers)
+                    return (
+                        patch, anchor.restoredY(in: next.text, patch: patch), starts,
+                        SyntaxSpanIndex(next.syntax)
+                    )
                 }.value
                 guard let self else { return }
+                guard self.latestRequestedID == next.id, self.textView != nil else {
+                    self.applying = false
+                    self.drain()
+                    return
+                }
                 if self.textView?.isTrackingSelection == true {
                     if self.pending == nil { self.pending = next }
                     self.applying = false
                     return
                 }
                 self.apply(
-                    next, patch: patch, restoredY: restoredY, capturedY: scrollY, lineCount: lineCount,
-                    numbers: numbers)
+                    next, patch: patch, restoredY: restoredY, capturedY: scrollY, starts: starts,
+                    index: index)
                 self.applying = false
                 self.drain()
             }
         }
         private func apply(
-            _ next: CodePresentation, patch: TextPatch, restoredY: Double, capturedY: Double, lineCount: Int,
-            numbers: [String]?
+            _ next: CodePresentation, patch: TextPatch, restoredY: Double, capturedY: Double, starts: [Int],
+            index: SyntaxSpanIndex
         ) {
             let interval = signposter.beginInterval("presentationApplied")
             defer { signposter.endInterval("presentationApplied", interval) }
@@ -154,6 +188,10 @@ public struct CodeEditor: NSViewRepresentable {
             var scroll = scrollView?.contentView.bounds.origin ?? .zero
             // If the user scrolled while a patch was computed, do not undo that input.
             if abs(Double(scroll.y) - capturedY) < 0.5 { scroll.y = CGFloat(restoredY) }
+            // Establish the document extent before changing the text storage. Otherwise TextKit
+            // may lay out every paragraph while the document still has its old viewport-sized frame.
+            ruler?.lineCount = starts.count
+            surface?.updateDocumentHeight()
             storage.beginEditing()
             let changesText = patch.range.length > 0 || !patch.replacement.isEmpty
             if changesText { storage.replaceCharacters(in: patch.range, with: patch.replacement) }
@@ -171,66 +209,118 @@ public struct CodeEditor: NSViewRepresentable {
             text.displayRows = next.rows
             let modeChanged = (current?.diff == nil) != (next.diff == nil)
             surface?.gutterWidth = next.diff == nil ? 48 : 118
-            text.textContainerInset.width = 20
             if modeChanged { scroll.x = 0 }
             storage.endEditing()
             current = next
+            syntaxIndex = index
+            lineStarts = starts
+            decoratedRange = nil
+            relocatedLine = nil
             text.needsDisplay = true
-            ruler?.numbers = numbers
             ruler?.diffLines = next.diff?.lines
             ruler?.displayRows = next.rows
-            ruler?.lineCount = lineCount
             let newStart = patch.map(selection.location)
             let newEnd = patch.map(selection.location + selection.length)
             text.setSelectedRange(
                 NSRange(
                     location: min(newStart, storage.length),
                     length: max(0, min(newEnd, storage.length) - min(newStart, storage.length))))
-            scrollView?.contentView.scroll(to: scroll)
+            if let clip = scrollView?.contentView {
+                scroll = clip.constrainBoundsRect(NSRect(origin: scroll, size: clip.bounds.size)).origin
+                scroll.y = max(0, min(scroll.y, text.frame.height - clip.bounds.height))
+                clip.scroll(to: scroll)
+            }
             if let scrollView { scrollView.reflectScrolledClipView(scrollView.contentView) }
             ruler?.needsDisplay = true
             surface?.needsDisplay = true
+            relocateViewport()
             text.textLayoutManager?.textViewportLayoutController.layoutViewport()
             decorate()
+        }
+        private func relocateViewport() {
+            guard !relocating, let text = textView, let scroll = scrollView,
+                let manager = text.textLayoutManager, let content = manager.textContentManager
+            else { return }
+            let line = min(
+                lineStarts.count - 1,
+                max(
+                    0,
+                    Int((scroll.contentView.bounds.minY - text.textContainerInset.height) / LoffoMetrics.line)
+                ))
+            guard relocatedLine != line else { return }
+            guard let location = content.location(content.documentRange.location, offsetBy: lineStarts[line])
+            else { return }
+            relocatedLine = line
+            relocating = true
+            defer { relocating = false }
+            _ = manager.textViewportLayoutController.relocateViewport(to: location)
         }
         private func decorate() {
             guard !decorating else { return }
             decorating = true
             defer { decorating = false }
-            guard let text = textView, let presentation = current,
-                let manager = text.textLayoutManager, let content = manager.textContentManager,
-                let viewport = manager.textViewportLayoutController.viewportRange,
+            guard let text = textView, current != nil, let scroll = scrollView,
                 let storage = text.textStorage
             else { return }
-            let start = content.offset(from: content.documentRange.location, to: viewport.location)
-            let end = content.offset(from: content.documentRange.location, to: viewport.endLocation)
+            // The clip can resize before TextKit updates viewportRange. Fixed-height line starts
+            // describe the new visible area immediately, including partially visible edge lines.
+            let bounds = scroll.contentView.bounds
+            let top = max(0, bounds.minY - text.textContainerInset.height)
+            let bottom = max(0, bounds.maxY - text.textContainerInset.height)
+            let first = min(lineStarts.count - 1, Int(top / LoffoMetrics.line))
+            let next = min(lineStarts.count, Int(bottom / LoffoMetrics.line) + 2)
+            let start = lineStarts[first]
+            let end = next < lineStarts.count ? lineStarts[next] : storage.length
             let visible = NSRange(location: max(0, start), length: max(0, end - start))
+            guard decoratedRange != visible else { return }
+            var dirty = [visible]
+            if let previous = decoratedRange {
+                let shared = NSIntersectionRange(previous, visible)
+                if shared.length > 0 {
+                    dirty = []
+                    if visible.location < shared.location {
+                        dirty.append(
+                            NSRange(location: visible.location, length: shared.location - visible.location))
+                    }
+                    if NSMaxRange(shared) < NSMaxRange(visible) {
+                        dirty.append(
+                            NSRange(
+                                location: NSMaxRange(shared),
+                                length: NSMaxRange(visible) - NSMaxRange(shared)))
+                    }
+                }
+            }
             storage.beginEditing()
-            storage.addAttribute(
-                .font, value: EditorTypography.code,
-                range: NSIntersectionRange(visible, NSRange(location: 0, length: storage.length)))
-            storage.addAttribute(
-                .foregroundColor, value: NSColor(syntaxTheme.foreground),
-                range: NSIntersectionRange(visible, NSRange(location: 0, length: storage.length)))
-            for span in presentation.syntax
-            where NSIntersectionRange(span.range, visible).length > 0
-                && NSMaxRange(span.range) <= storage.length
-            {
-                let color = NSColor(syntaxTheme.color(for: span.kind))
-                storage.addAttribute(.foregroundColor, value: color, range: span.range)
-                if span.kind == .comment {
-                    storage.addAttribute(.font, value: EditorTypography.comment, range: span.range)
+            for range in dirty where range.length > 0 {
+                storage.addAttribute(.font, value: EditorTypography.code, range: range)
+                storage.addAttribute(.foregroundColor, value: NSColor(syntaxTheme.foreground), range: range)
+                for span in syntaxIndex.intersecting(range, storageLength: storage.length) {
+                    let intersection = NSIntersectionRange(span.range, range)
+                    let color = NSColor(syntaxTheme.color(for: span.kind))
+                    storage.addAttribute(.foregroundColor, value: color, range: intersection)
+                    if span.kind == .comment {
+                        storage.addAttribute(.font, value: EditorTypography.comment, range: intersection)
+                    }
                 }
             }
             storage.endEditing()
+            decoratedRange = visible
         }
         nonisolated fileprivate static func displayLine(_ text: String) -> String {
             text.hasSuffix("\n") ? text : text + "\n"
         }
-        fileprivate func disconnect() {
+        func disconnect() {
             if let observer { NotificationCenter.default.removeObserver(observer) }
+            if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
             observer = nil
+            resizeObserver = nil
             pending = nil
+            current = nil
+            syntaxIndex = SyntaxSpanIndex([])
+            lineStarts = [0]
+            decoratedRange = nil
+            relocatedLine = nil
+            latestRequestedID = nil
             textView?.selectionEnded = nil
             textView = nil
             scrollView = nil
@@ -241,6 +331,12 @@ public struct CodeEditor: NSViewRepresentable {
 }
 
 @MainActor final class TrackingTextView: NSTextView {
+    // This surface is left-aligned, unwrapped, and has fixed insets and line height. AppKit's
+    // default origin lookup forces whole-document layout; the coordinator relocates the viewport
+    // explicitly as the fixed-height scroll position crosses line boundaries.
+    override var textContainerOrigin: NSPoint {
+        NSPoint(x: textContainerInset.width, y: textContainerInset.height)
+    }
     var isTrackingSelection = false
     var displayRows: [PresentedLine]?
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {

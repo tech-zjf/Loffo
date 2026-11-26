@@ -26,26 +26,36 @@ public actor LineDiff: DiffComputing {
     public func compare(before: String, after: String) async throws -> DiffResult {
         let cost = (before.utf8.count + after.utf8.count) * 6 + cellBudget * 4
         try await admission.acquire(bytes: cost)
-        let result = compute(before: before, after: after, forceCoarse: false)
+        let result: DiffResult
+        do {
+            result = try compute(before: before, after: after, forceCoarse: false)
+        } catch {
+            await admission.release(bytes: cost)
+            throw error
+        }
         await admission.release(bytes: cost)
         try Task.checkCancellation()
         return result
     }
 
-    private func compute(before: String, after: String, forceCoarse: Bool) -> DiffResult {
+    private func compute(before: String, after: String, forceCoarse: Bool) throws -> DiffResult {
         let signposter = OSSignposter(subsystem: "app.loffo", category: "Diff")
         let interval = signposter.beginInterval("diffComputed")
         defer { signposter.endInterval("diffComputed", interval) }
-        let old = Self.lines(before)
-        let new = Self.lines(after)
+        let old = try Self.checkedLines(before)
+        let new = try Self.checkedLines(after)
         var prefix = 0
         while prefix < min(old.count, new.count), old[prefix].utf8.elementsEqual(new[prefix].utf8) {
+            if prefix.isMultiple(of: 1024) { try Task.checkCancellation() }
             prefix += 1
         }
         var suffix = 0
         while suffix < min(old.count, new.count) - prefix,
             old[old.count - suffix - 1].utf8.elementsEqual(new[new.count - suffix - 1].utf8)
-        { suffix += 1 }
+        {
+            if suffix.isMultiple(of: 1024) { try Task.checkCancellation() }
+            suffix += 1
+        }
         let a = Array(old[prefix..<(old.count - suffix)])
         let b = Array(new[prefix..<(new.count - suffix)])
         var output: [DiffLine] = []
@@ -65,7 +75,7 @@ public actor LineDiff: DiffComputing {
         let matrixFits = !cells.overflow && cells.partialValue <= cellBudget
         let myersSteps =
             !forceCoarse && !matrixFits && !Task.isCancelled
-            ? Self.myers(a, b, maximumDistance: myersDistanceBudget)
+            ? try Self.myers(a, b, maximumDistance: myersDistanceBudget)
             : nil
         let coarse = forceCoarse || Task.isCancelled || (!matrixFits && myersSteps == nil)
         if coarse {
@@ -84,6 +94,7 @@ public actor LineDiff: DiffComputing {
             var lengths = [Int32](repeating: 0, count: cells.partialValue)
             if !a.isEmpty && !b.isEmpty {
                 for i in stride(from: a.count - 1, through: 0, by: -1) {
+                    if i.isMultiple(of: 16) { try Task.checkCancellation() }
                     for j in stride(from: b.count - 1, through: 0, by: -1) {
                         lengths[i * width + j] =
                             a[i].utf8.elementsEqual(b[j].utf8)
@@ -95,6 +106,7 @@ public actor LineDiff: DiffComputing {
             var i = 0
             var j = 0
             while i < a.count || j < b.count {
+                if (i + j).isMultiple(of: 1024) { try Task.checkCancellation() }
                 if i < a.count && j < b.count && a[i].utf8.elementsEqual(b[j].utf8) {
                     append(a[i], .context)
                     i += 1
@@ -116,7 +128,7 @@ public actor LineDiff: DiffComputing {
 
     /// Myers finds small edit distances in large files without allocating an N×M matrix.
     /// The distance limit bounds both trace storage and worst-case comparison work.
-    private static func myers(_ old: [String], _ new: [String], maximumDistance: Int) -> [Step]? {
+    private static func myers(_ old: [String], _ new: [String], maximumDistance: Int) throws -> [Step]? {
         let maximum = min(maximumDistance, old.count + new.count)
         let offset = old.count + new.count + 1
         var frontier = [Int](repeating: -1, count: 2 * offset + 1)
@@ -126,6 +138,7 @@ public actor LineDiff: DiffComputing {
         var finalDistance: Int?
 
         for distance in 0...maximum {
+            try Task.checkCancellation()
             for diagonal in stride(from: -distance, through: distance, by: 2) {
                 let index = offset + diagonal
                 var x: Int
@@ -140,6 +153,7 @@ public actor LineDiff: DiffComputing {
                 while x < old.count, y < new.count,
                     old[x].utf8.elementsEqual(new[y].utf8)
                 {
+                    if x.isMultiple(of: 1024) { try Task.checkCancellation() }
                     x += 1
                     y += 1
                 }
@@ -162,6 +176,7 @@ public actor LineDiff: DiffComputing {
         var reversed: [Step] = []
         if finalDistance > 0 {
             for distance in stride(from: finalDistance, through: 1, by: -1) {
+                try Task.checkCancellation()
                 let previous = trace[distance - 1]
                 let diagonal = x - y
                 let previousDiagonal: Int
@@ -205,6 +220,25 @@ public actor LineDiff: DiffComputing {
             y -= 1
         }
         return reversed.reversed()
+    }
+
+    private static func checkedLines(_ text: String) throws -> [String] {
+        guard !text.isEmpty else { return [] }
+        var result: [String] = []
+        var start = text.startIndex
+        var count = 0
+        for index in text.indices {
+            count += 1
+            if count.isMultiple(of: 4096) { try Task.checkCancellation() }
+            if text[index].isNewline {
+                let end = text.index(after: index)
+                result.append(String(text[start..<end]))
+                start = end
+            }
+        }
+        if start < text.endIndex { result.append(String(text[start...])) }
+        try Task.checkCancellation()
+        return result
     }
 
     /// Keep terminators so projecting either side reproduces the exact input.

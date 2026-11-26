@@ -8,6 +8,8 @@
 "Before: no final newline" = "Before: no final newline";
 "Changes" = "Changes";
 "Changes in this file" = "Changes in this file";
+"Changes unavailable" = "Changes unavailable";
+"Checking for changes" = "Checking for changes";
 "Choose a valid VS Code color theme JSON file." = "Choose a valid VS Code color theme JSON file.";
 "Code" = "Code";
 "Collapse Context" = "Collapse Context";
@@ -15,6 +17,7 @@
 "Compare files to HEAD" = "Compare files to HEAD";
 "Compare revisions" = "Compare revisions";
 "Conflicted" = "Conflicted";
+"Copied" = "Copied";
 "Copy commit ID" = "Copy commit ID";
 "Copy path" = "Copy path";
 "Could not import theme" = "Could not import theme";
@@ -24,6 +27,7 @@
 "File" = "File";
 "File actions" = "File actions";
 "File history" = "File history";
+"File monitoring unavailable" = "File monitoring unavailable";
 "File outline" = "File outline";
 "Files" = "Files";
 "Filter Files" = "Filter Files";
@@ -31,6 +35,7 @@
 "HEAD → Working tree" = "HEAD → Working tree";
 "History" = "History";
 "Import VS Code Theme…" = "Import VS Code Theme…";
+"Initial → Working tree" = "Initial → Working tree";
 "Large rewrite · coarse comparison" = "Large rewrite · coarse comparison";
 "Last commit" = "Last commit";
 "Live" = "Live";
@@ -41,6 +46,7 @@
 "Mark as reviewed" = "Mark as reviewed";
 "Modified" = "Modified";
 "Next change" = "Next change";
+"No changes" = "No changes";
 "No declarations in this file" = "No declarations in this file";
 "No local history" = "No local history";
 "No matching files" = "No matching files";
@@ -68,6 +74,7 @@
 "Selected" = "Selected";
 "Show Full File" = "Show Full File";
 "Split diff is not available yet" = "Split diff is not available yet";
+"Syntax highlighting is incomplete for this file." = "Syntax highlighting is incomplete for this file.";
 "The changed-file listing is incomplete." = "The changed-file listing is incomplete.";
 "The file could not be loaded." = "The file could not be loaded.";
 "The file listing is incomplete." = "The file listing is incomplete.";

@@ -69,16 +69,18 @@ public struct CodePresentation: Sendable {
     public let id: UUID
     public let text: String
     public let syntax: [SyntaxSpan]
+    public let syntaxLimited: Bool
     public let diff: DiffResult?
     public let rows: [PresentedLine]?
     public let hunkStarts: [Int]
     public init(
         text: String, syntax: [SyntaxSpan] = [], diff: DiffResult? = nil, rows: [PresentedLine]? = nil,
-        hunkStarts: [Int] = []
+        hunkStarts: [Int] = [], syntaxLimited: Bool = false
     ) {
         id = UUID()
         self.text = text
         self.syntax = syntax
+        self.syntaxLimited = syntaxLimited
         self.diff = diff
         self.rows = rows
         self.hunkStarts = hunkStarts

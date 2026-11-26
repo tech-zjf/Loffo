@@ -6,6 +6,7 @@ public actor WorkAdmission {
         let id: UUID
         let bytes: Int
         let continuation: CheckedContinuation<Void, any Error>
+        var bypasses = 0
     }
     private let maximumJobs: Int
     private let maximumBytes: Int
@@ -19,10 +20,11 @@ public actor WorkAdmission {
     }
     public var activeJobs: Int { jobs }
     public var admittedBytes: Int { bytes }
+    public var queuedJobs: Int { waiting.count }
 
     public func acquire(bytes requested: Int) async throws {
         try Task.checkCancellation()
-        guard requested <= maximumBytes, waiting.count < 32 else {
+        guard requested >= 0, requested <= maximumBytes, waiting.count < 32 else {
             throw WorkspaceFailure.unavailable(
                 "The shared processing budget is full. Retry after other work finishes.")
         }
@@ -45,10 +47,24 @@ public actor WorkAdmission {
     private func cancel(_ id: UUID) {
         guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
         waiting.remove(at: index).continuation.resume(throwing: CancellationError())
+        drain()
     }
     private func drain() {
-        while let next = waiting.first, jobs < maximumJobs, bytes + next.bytes <= maximumBytes {
-            waiting.removeFirst()
+        while let first = waiting.first, jobs < maximumJobs {
+            let available = maximumBytes - bytes
+            let index: Int
+            if first.bytes <= available {
+                index = 0
+            } else if first.bypasses < 2,
+                let fitting = waiting.indices.dropFirst().first(where: { waiting[$0].bytes <= available })
+            {
+                // Limit bypasses so a large request eventually gets the capacity it needs.
+                waiting[0].bypasses += 1
+                index = fitting
+            } else {
+                break
+            }
+            let next = waiting.remove(at: index)
             jobs += 1
             bytes += next.bytes
             next.continuation.resume()

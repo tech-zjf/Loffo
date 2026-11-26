@@ -20,6 +20,7 @@ import LoffoDomain
     private var order: [Key] = []
     private var workspaceLeases: [String: Int] = [:]
     public private(set) var bytes = 0
+    public private(set) var generation: UInt64 = 0
     public let maximumEntries: Int
     public let maximumBytes: Int
 
@@ -58,8 +59,9 @@ import LoffoDomain
 
     public func insert(
         _ presentation: CodePresentation, workspace: URL, path: String, comparison: Bool,
-        expanded: Bool, version: UInt64
+        expanded: Bool, version: UInt64, generation expectedGeneration: UInt64
     ) {
+        guard expectedGeneration == generation else { return }
         let key = Key(
             workspace: Self.workspaceKey(workspace), path: path,
             comparison: comparison, expanded: expanded)
@@ -85,9 +87,16 @@ import LoffoDomain
     }
 
     public func removeAll() {
+        generation &+= 1
         entries.removeAll()
         order.removeAll()
         bytes = 0
+    }
+
+    public func remove(workspace: URL, path: String, comparison: Bool) {
+        generation &+= 1
+        let workspace = Self.workspaceKey(workspace)
+        removeEntries { $0.workspace == workspace && $0.path == path && $0.comparison == comparison }
     }
 
     private func removeEntries(where predicate: (Key) -> Bool) {
