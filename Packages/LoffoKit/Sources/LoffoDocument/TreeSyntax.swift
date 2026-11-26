@@ -28,7 +28,7 @@ public actor TreeSyntax: SyntaxProviding {
     private var languageExtension = ""
     private var cacheGeneration: UInt64 = 0
     private let admission: WorkAdmission
-    private static let spanLimit = 120_000
+    fileprivate static let spanLimit = 120_000
     public init(admission: WorkAdmission = WorkAdmission()) { self.admission = admission }
 
     public func discardCachedTree() {
@@ -133,56 +133,61 @@ public actor TreeSyntax: SyntaxProviding {
         storage.tree = tree
         previous = snapshot
         languageExtension = ext
-        var pending: [PendingSpan] = []
-        var nodes = [ts_tree_root_node(tree)]
-        var visited = 0
-        while pending.count < Self.spanLimit, let node = nodes.popLast() {
-            visited += 1
-            if visited.isMultiple(of: 1_024), Task.isCancelled {
-                return SyntaxHighlights(spans: [], isLimited: true)
-            }
-            let type = String(cString: ts_node_type(node))
-            let start = Int(ts_node_start_byte(node))
-            let end = Int(ts_node_end_byte(node))
-            var kind = Self.kind(type)
-            if kind == nil, ["identifier", "shorthand_property_identifier_pattern"].contains(type),
-                ["ts", "tsx", "js", "jsx", "mjs", "cjs"].contains(ext)
-            {
-                let parent = ts_node_parent(node)
-                if Self.isParameterBinding(node) {
-                    kind = .parameter
-                } else if type == "identifier", !ts_node_is_null(parent) {
-                    let parentType = String(cString: ts_node_type(parent))
-                    if parentType == "call_expression",
-                        ts_node_eq(node, ts_node_child_by_field_name(parent, "function", 8))
-                    {
-                        kind = .functionCall
-                    } else if parentType == "new_expression",
-                        ts_node_eq(node, ts_node_child_by_field_name(parent, "constructor", 11))
-                    {
-                        kind = .constructor
-                    }
-                }
-            }
-            if kind == .string {
-                let parent = ts_node_parent(node)
-                if !ts_node_is_null(parent), String(cString: ts_node_type(parent)) == "import_statement" {
-                    kind = .importPath
-                }
-            }
-            if let kind, end <= bytes.count, start <= end {
-                pending.append(PendingSpan(startByte: start, endByte: end, kind: kind))
-            } else {
-                let count = ts_node_child_count(node)
-                if count > 0 {
-                    for index in (0..<count).reversed() { nodes.append(ts_node_child(node, index)) }
-                }
-            }
-        }
-        guard let spans = Self.utf16Spans(in: snapshot.text, pending: pending) else {
+        guard let query = storage.query(for: ext, language: language) else {
             return SyntaxHighlights(spans: [], isLimited: true)
         }
-        return SyntaxHighlights(spans: spans, isLimited: !nodes.isEmpty)
+        let cursor = storage.queryCursor
+        guard let cursor else { return SyntaxHighlights(spans: [], isLimited: true) }
+        ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree))
+        var pending: [PendingSpan] = []
+        var match = TSQueryMatch()
+        var captureIndex: UInt32 = 0
+        var capturedCount = 0
+        var isLimited = false
+        while ts_query_cursor_next_capture(cursor, &match, &captureIndex) {
+            guard !Task.isCancelled else { return SyntaxHighlights(spans: [], isLimited: true) }
+            capturedCount += 1
+            guard capturedCount <= Self.spanLimit else {
+                isLimited = true
+                break
+            }
+            guard let captures = match.captures else { return SyntaxHighlights(spans: [], isLimited: true) }
+            let capture = captures[Int(captureIndex)]
+            var captureNameLength: UInt32 = 0
+            guard
+                let captureName = ts_query_capture_name_for_id(
+                    query, capture.index, &captureNameLength)
+            else {
+                continue
+            }
+            let nameBytes = UnsafeBufferPointer(
+                start: UnsafeRawPointer(captureName).assumingMemoryBound(to: UInt8.self),
+                count: Int(captureNameLength))
+            let name = String(decoding: nameBytes, as: UTF8.self)
+            guard let kind = Self.kind(capture: name, node: capture.node, extension: ext) else {
+                continue
+            }
+            let start = Int(ts_node_start_byte(capture.node))
+            let end = Int(ts_node_end_byte(capture.node))
+            if kind == .string, Self.isImportPath(capture.node) {
+                pending.append(PendingSpan(startByte: start, endByte: end, kind: .importPath))
+            } else if end <= bytes.count, start <= end {
+                pending.append(PendingSpan(startByte: start, endByte: end, kind: kind))
+            }
+        }
+        isLimited = isLimited || ts_query_cursor_did_exceed_match_limit(cursor)
+        pending.sort {
+            $0.startByte == $1.startByte ? $0.endByte > $1.endByte : $0.startByte < $1.startByte
+        }
+        var nonOverlapping: [PendingSpan] = []
+        nonOverlapping.reserveCapacity(pending.count)
+        for span in pending where nonOverlapping.last.map({ span.startByte >= $0.endByte }) ?? true {
+            nonOverlapping.append(span)
+        }
+        guard let spans = Self.utf16Spans(in: snapshot.text, pending: nonOverlapping) else {
+            return SyntaxHighlights(spans: [], isLimited: true)
+        }
+        return SyntaxHighlights(spans: spans, isLimited: isLimited)
     }
 
     private func discardTree() {
@@ -191,7 +196,36 @@ public actor TreeSyntax: SyntaxProviding {
         languageExtension = ""
     }
 
-    /// Follow only binding sides of patterns; defaults, computed keys and local destructuring are expressions.
+    private static func kind(capture: String, node: TSNode, extension ext: String) -> SyntaxKind? {
+        if capture == "identifier", ["ts", "tsx", "js", "jsx", "mjs", "cjs"].contains(ext) {
+            if isParameterBinding(node) { return .parameter }
+            let parent = ts_node_parent(node)
+            guard !ts_node_is_null(parent) else { return nil }
+            switch String(cString: ts_node_type(parent)) {
+            case "call_expression"
+            where ts_node_eq(
+                node, ts_node_child_by_field_name(parent, "function", 8)):
+                return .functionCall
+            case "new_expression"
+            where ts_node_eq(
+                node, ts_node_child_by_field_name(parent, "constructor", 11)):
+                return .constructor
+            default:
+                return nil
+            }
+        }
+        if capture == "keyword" || capture.hasPrefix("keyword.") { return .keyword }
+        if capture == "type" || capture.hasPrefix("type.") { return .type }
+        if capture == "string" || capture.hasPrefix("string.") { return .string }
+        if capture == "comment" || capture.hasPrefix("comment.") { return .comment }
+        if capture == "number" || capture.hasPrefix("number.") { return .number }
+        if capture == "function.call" || capture == "function.method" { return .functionCall }
+        if capture == "constructor" { return .constructor }
+        if capture == "variable.parameter" { return .parameter }
+        return nil
+    }
+
+    /// Follow binding fields only; defaults, computed keys and local destructuring are expressions.
     private static func isParameterBinding(_ node: TSNode) -> Bool {
         var child = node
         while true {
@@ -216,32 +250,9 @@ public actor TreeSyntax: SyntaxProviding {
         }
     }
 
-    private static func kind(_ type: String) -> SyntaxKind? {
-        if type.contains("comment") { return .comment }
-        if type.contains("string") || type.contains("character_literal") { return .string }
-        if type == "number" || type.contains("integer_literal") || type.contains("float_literal")
-            || type.contains("decimal_floating")
-        {
-            return .number
-        }
-        if ["type_identifier", "predefined_type", "primitive_type", "class_name"].contains(type) {
-            return .type
-        }
-        if [
-            "import", "export", "from", "const", "let", "var", "function", "async", "await", "return", "if",
-            "else", "new", "class", "interface", "type", "extends", "throw", "try", "catch", "for", "of",
-            "in", "true", "false", "null", "undefined", "func", "struct", "enum", "protocol", "extension",
-            "guard", "switch", "case", "default", "defer", "do", "while", "break", "continue", "self",
-            "super", "init", "where", "as", "is", "throws", "rethrows", "public", "private", "internal",
-            "static", "final", "override", "mutating", "try?", "try!", "def", "elif", "pass", "raise",
-            "lambda", "with", "yield", "async", "await", "and", "or", "not", "None", "True", "False",
-            "fn", "impl", "trait", "mod", "pub", "use", "match", "mut", "ref", "move", "loop", "unsafe",
-            "crate", "self", "Self", "Some", "Ok", "Err", "package", "void", "boolean", "byte", "short",
-            "int", "long", "float", "double", "char", "new", "this", "throws", "instanceof", "synchronized",
-        ].contains(type) {
-            return .keyword
-        }
-        return nil
+    private static func isImportPath(_ node: TSNode) -> Bool {
+        let parent = ts_node_parent(node)
+        return !ts_node_is_null(parent) && String(cString: ts_node_type(parent)) == "import_statement"
     }
 
     static func pythonSpans(in text: String, isCancelled: () -> Bool = { Task.isCancelled })
@@ -347,13 +358,47 @@ public actor TreeSyntax: SyntaxProviding {
 
 private final class ParserStorage {
     let parser = ts_parser_new()
+    let queryCursor = ts_query_cursor_new()
     var tree: OpaquePointer?
+    private var queries: [String: OpaquePointer] = [:]
+
+    init() {
+        if let queryCursor { ts_query_cursor_set_match_limit(queryCursor, UInt32(TreeSyntax.spanLimit)) }
+    }
+
+    func query(for fileExtension: String, language: OpaquePointer?) -> OpaquePointer? {
+        let queryName: String
+        switch fileExtension {
+        case "ts", "tsx", "js", "jsx", "mjs", "cjs": queryName = "typescript"
+        case "swift": queryName = "swift"
+        case "rs": queryName = "rust"
+        case "java": queryName = "java"
+        default: return nil
+        }
+        if let cached = queries[queryName] { return cached }
+        guard
+            let language,
+            let url = Bundle.module.url(forResource: queryName, withExtension: "scm"),
+            let source = try? String(contentsOf: url, encoding: .utf8),
+            source.utf8.count <= Int(UInt32.max)
+        else { return nil }
+        var errorOffset: UInt32 = 0
+        var errorType = TSQueryErrorNone
+        let query = source.withCString {
+            ts_query_new(language, $0, UInt32(source.utf8.count), &errorOffset, &errorType)
+        }
+        if let query { queries[queryName] = query }
+        return query
+    }
+
     func clearTree() {
         if let tree { ts_tree_delete(tree) }
         tree = nil
     }
     deinit {
         clearTree()
+        for query in queries.values { ts_query_delete(query) }
+        if let queryCursor { ts_query_cursor_delete(queryCursor) }
         if let parser { ts_parser_delete(parser) }
     }
 }

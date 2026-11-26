@@ -117,6 +117,67 @@ import os
     #expect(highlights.spans.contains { NSIntersectionRange($0.range, lastLine).length > 0 })
 }
 
+@Test func supportedSyntaxLanguagesColorizeCoreTokenCategories() async {
+    let fixtures: [(String, String, [(String, SyntaxKind)])] = [
+        (
+            "sample.ts",
+            "export const value: Widget = \"ok\"; // note\nconst count = 42;",
+            [
+                ("export", .keyword), ("Widget", .type), ("\"ok\"", .string), ("// note", .comment),
+                ("42", .number),
+            ]
+        ),
+        (
+            "sample.swift",
+            "public struct Widget { let count: Int = 42; } // note\nlet title = \"ok\"",
+            [
+                ("public", .keyword), ("Widget", .type), ("\"ok\"", .string), ("// note", .comment),
+                ("42", .number),
+            ]
+        ),
+        (
+            "sample.rs",
+            "pub struct Widget { pub fn count() -> i32 { 42 } } // note\nlet title = \"ok\";",
+            [
+                ("pub", .keyword), ("Widget", .type), ("\"ok\"", .string), ("// note", .comment),
+                ("42", .number),
+            ]
+        ),
+        (
+            "sample.java",
+            "public class Widget { String title = \"ok\"; int count = 42; } // note",
+            [
+                ("public", .keyword), ("Widget", .type), ("String", .type), ("\"ok\"", .string),
+                ("// note", .comment), ("42", .number),
+            ]
+        ),
+        (
+            "sample.py",
+            "def widget(count):\n    title = \"ok\"  # note\n    value = 42",
+            [("def", .keyword), ("\"ok\"", .string), ("# note", .comment), ("42", .number)]
+        ),
+    ]
+
+    for (path, text, expected) in fixtures {
+        let snapshot = TextSnapshot(url: URL(fileURLWithPath: "/fixture/" + path), version: 1, text: text)
+        let spans = await TreeSyntax().highlightsWithStatus(for: snapshot).spans
+        let source = text as NSString
+        for (token, kind) in expected {
+            let range = source.range(of: token)
+            #expect(
+                spans.contains { $0.kind == kind && $0.range == range },
+                "\(path) should mark \(token) as \(kind)"
+            )
+        }
+    }
+
+    let text = "export const value: Widget = \"ok\";"
+    let snapshot = TextSnapshot(url: URL(fileURLWithPath: "/fixture/typed.ts"), version: 1, text: text)
+    let spans = await TreeSyntax().highlightsWithStatus(for: snapshot).spans
+    let source = text as NSString
+    #expect(!spans.contains { $0.kind == .type && $0.range == source.range(of: "value") })
+}
+
 @Test func transientBaselineHighlightDoesNotRemainInParserCache() async throws {
     let url = URL(fileURLWithPath: "/sample.ts")
     let working = TextSnapshot(url: url, version: 1, text: "const current = 1;\n")
