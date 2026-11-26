@@ -10,7 +10,7 @@
 "Changes in this file" = "Changes in this file";
 "Changes unavailable" = "Changes unavailable";
 "Checking for changes" = "Checking for changes";
-"Choose a valid VS Code color theme JSON file." = "Choose a valid VS Code color theme JSON file.";
+"Choose a valid VS Code or Zed theme JSON file." = "Choose a valid VS Code or Zed theme JSON file.";
 "Code" = "Code";
 "Collapse Context" = "Collapse Context";
 "Collapsed" = "Collapsed";
@@ -34,7 +34,7 @@
 "Filter files" = "Filter files";
 "HEAD → Working tree" = "HEAD → Working tree";
 "History" = "History";
-"Import VS Code Theme…" = "Import VS Code Theme…";
+"Import Editor Theme…" = "Import Editor Theme…";
 "Initial → Working tree" = "Initial → Working tree";
 "Large rewrite · coarse comparison" = "Large rewrite · coarse comparison";
 "Last commit" = "Last commit";

@@ -9,7 +9,7 @@ allowed = {
     'LoffoDomain': {'Foundation'},
     'LoffoDocument': {
         'Foundation', 'OSLog', 'os', 'LoffoDomain', 'TreeSitter', 'TreeSitterTypeScript', 'TreeSitterTSX',
-        'TreeSitterRust', 'TreeSitterJava', 'TreeSitterSwift',
+        'TreeSitterRust', 'TreeSitterJava', 'TreeSitterSwift', 'TreeSitterJSON', 'TreeSitterMarkdown',
     },
     'LoffoDiff': {'Foundation', 'OSLog', 'LoffoDomain'},
     'LoffoInfrastructure': {'Foundation', 'CoreServices', 'Darwin', 'os', 'LoffoDomain', 'LoffoDocument'},

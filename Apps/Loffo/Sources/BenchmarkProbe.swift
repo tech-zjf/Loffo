@@ -81,35 +81,53 @@ import SwiftUI
             entries.removeAll { $0.project == nil }
         }
         let windows = entries.compactMap(\.window)
-        let screens = NSScreen.screens.sorted { $0.visibleFrame.width > $1.visibleFrame.width }
-        guard let largest = screens.first, !windows.isEmpty else {
+        guard let screen = NSScreen.screens.max(by: { $0.visibleFrame.width < $1.visibleFrame.width }),
+            !windows.isEmpty
+        else {
             arrangement = "no windows or screens available"
             return
         }
-        for (index, window) in windows.enumerated() {
-            let frame: NSRect
-            if windows.count == 5, screens.count > 1, index < 4 {
-                let area = largest.visibleFrame
-                let size = NSSize(width: max(960, area.width / 2), height: max(540, area.height / 2))
-                frame = NSRect(
-                    x: area.minX + CGFloat(index % 2) * size.width,
-                    y: area.maxY - CGFloat(index / 2 + 1) * size.height,
-                    width: size.width, height: size.height)
-            } else {
-                let area = (screens.count > 1 && index == 4 ? screens[1] : largest).visibleFrame
-                let width = min(1280, area.width)
-                let height = min(720, area.height)
-                let step = windows.count == 5 && screens.count > 1 ? 0 : CGFloat(index) * 28
-                frame = NSRect(
-                    x: area.minX + step, y: area.maxY - height - step,
-                    width: width, height: height)
-            }
+        let area = screen.visibleFrame
+        guard let frames = Self.tileFrames(for: windows.count, in: area) else {
+            arrangement = "invalid: largest screen cannot fit all requested windows at minimum size"
+            return
+        }
+        for (window, frame) in zip(windows, frames) {
             window.setFrame(frame, display: true)
             window.orderFront(nil)
         }
         windows.last?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        arrangement = "best-effort tiling; inspect actual frames, overlap and occlusion in this report"
+        arrangement = "tiled on largest screen; report validates bounds and overlap"
+    }
+
+    private static func tileFrames(for count: Int, in area: NSRect) -> [NSRect]? {
+        guard count > 0 else { return nil }
+        let minimum = NSSize(width: 960, height: 540)
+        let maximum = NSSize(width: 1280, height: 720)
+        let columns = (1...count).compactMap { columnCount -> (Int, Int, CGFloat)? in
+            let rowCount = (count + columnCount - 1) / columnCount
+            let cellWidth = area.width / CGFloat(columnCount)
+            let cellHeight = area.height / CGFloat(rowCount)
+            guard cellWidth >= minimum.width, cellHeight >= minimum.height else { return nil }
+            return (columnCount, rowCount, min(cellWidth, maximum.width) * min(cellHeight, maximum.height))
+        }
+        guard let (columnCount, rowCount, _) = columns.max(by: { $0.2 < $1.2 }) else { return nil }
+
+        let cellWidth = area.width / CGFloat(columnCount)
+        let cellHeight = area.height / CGFloat(rowCount)
+        let windowWidth = min(cellWidth, maximum.width)
+        let windowHeight = min(cellHeight, maximum.height)
+        return (0..<count).map { index in
+            let column = index % columnCount
+            let row = index / columnCount
+            let cellMinX = area.minX + CGFloat(column) * cellWidth
+            let cellMaxY = area.maxY - CGFloat(row) * cellHeight
+            return NSRect(
+                x: cellMinX + (cellWidth - windowWidth) / 2,
+                y: cellMaxY - cellHeight + (cellHeight - windowHeight) / 2,
+                width: windowWidth, height: windowHeight)
+        }
     }
 
     #if DEBUG

@@ -100,6 +100,7 @@ public enum WorkspaceFailure: Error, Sendable, LocalizedError {
 
 public enum SyntaxKind: Sendable, Hashable {
     case keyword, string, comment, number, type, importPath, functionCall, constructor, parameter
+    case property, constant, heading, markup, link, code
 }
 public struct SyntaxSpan: Sendable {
     public let range: NSRange

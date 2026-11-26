@@ -1,5 +1,5 @@
 {
-  "originHash" : "f2f3c36722f682e068982e6639c8bf78cde4a6865261a80e3c5d4dd8f4a137b5",
+  "originHash" : "1344e8db03e6359018cb958eec08157d34df22d22426da5c6c21ed71d85c5ce0",
   "pins" : [
     {
       "identity" : "tree-sitter",
@@ -17,6 +17,24 @@
       "state" : {
         "revision" : "94703d5a6bed02b98e438d7cad1136c01a60ba2c",
         "version" : "0.23.5"
+      }
+    },
+    {
+      "identity" : "tree-sitter-json",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter/tree-sitter-json",
+      "state" : {
+        "revision" : "ee35a6ebefcef0c5c416c0d1ccec7370cfca5a24",
+        "version" : "0.24.8"
+      }
+    },
+    {
+      "identity" : "tree-sitter-markdown",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/tree-sitter-grammars/tree-sitter-markdown",
+      "state" : {
+        "revision" : "2dfd57f547f06ca5631a80f601e129d73fc8e9f0",
+        "version" : "0.5.1"
       }
     },
     {

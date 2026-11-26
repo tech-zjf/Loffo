@@ -20,6 +20,8 @@ let package = Package(
         .package(url: "https://github.com/tree-sitter/tree-sitter-java", exact: "0.23.5"),
         .package(
             url: "https://github.com/alex-pinkus/tree-sitter-swift", exact: "0.7.3-with-generated-files"),
+        .package(url: "https://github.com/tree-sitter/tree-sitter-json", exact: "0.24.8"),
+        .package(url: "https://github.com/tree-sitter-grammars/tree-sitter-markdown", exact: "0.5.1"),
     ],
     targets: [
         .target(name: "LoffoDomain", exclude: ["Localization"], resources: [.process("Resources")]),
@@ -31,6 +33,8 @@ let package = Package(
                 .product(name: "TreeSitterRust", package: "tree-sitter-rust"),
                 .product(name: "TreeSitterJava", package: "tree-sitter-java"),
                 .product(name: "TreeSitterSwift", package: "tree-sitter-swift"),
+                .product(name: "TreeSitterJSON", package: "tree-sitter-json"),
+                .product(name: "TreeSitterMarkdown", package: "tree-sitter-markdown"),
             ],
             resources: [.process("SyntaxQueries")]),
         .target(name: "LoffoDiff", dependencies: ["LoffoDomain"]),

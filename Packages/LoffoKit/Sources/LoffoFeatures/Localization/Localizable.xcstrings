@@ -771,22 +771,22 @@
         }
       }
     },
-    "Choose a valid VS Code color theme JSON file.": {
+    "Choose a valid VS Code or Zed theme JSON file.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choose a valid VS Code color theme JSON file."
+            "value": "Choose a valid VS Code or Zed theme JSON file."
           }
         }
       }
     },
-    "Import VS Code Theme…": {
+    "Import Editor Theme…": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Import VS Code Theme…"
+            "value": "Import Editor Theme…"
           }
         }
       }

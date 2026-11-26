@@ -28,7 +28,7 @@ public struct WorkspaceView: View {
     public init(model: WorkspaceModel) {
         self.model = model
         if let json = UserDefaults.standard.string(forKey: "Loffo.editorThemeJSON"),
-            let theme = try? EditorSyntaxTheme(vscodeJSON: Data(json.utf8))
+            let theme = try? EditorSyntaxTheme(importing: Data(json.utf8))
         {
             _syntaxTheme = State(initialValue: theme)
         }
@@ -77,7 +77,7 @@ public struct WorkspaceView: View {
         .alert(L10n.text("Could not import theme"), isPresented: $themeImportFailed) {
             Button(L10n.text("OK"), role: .cancel) {}
         } message: {
-            Text(L10n.text("Choose a valid VS Code color theme JSON file."))
+            Text(L10n.text("Choose a valid VS Code or Zed theme JSON file."))
         }
         .focusedSceneValue(\.workspaceOpenFolder, chooseFolder)
     }
@@ -633,7 +633,7 @@ public struct WorkspaceView: View {
             }
             Menu {
                 Button(L10n.text("Reload File and Baseline")) { model.reload() }
-                Button(L10n.text("Import VS Code Theme…"), action: chooseSyntaxTheme)
+                Button(L10n.text("Import Editor Theme…"), action: chooseSyntaxTheme)
                 Button(L10n.text("Use Default Syntax Theme")) {
                     syntaxTheme = .standard
                     UserDefaults.standard.removeObject(forKey: "Loffo.editorThemeJSON")
@@ -801,7 +801,7 @@ public struct WorkspaceView: View {
                 return
             }
             let data = try Data(contentsOf: url)
-            let theme = try EditorSyntaxTheme(vscodeJSON: data)
+            let theme = try EditorSyntaxTheme(importing: data)
             syntaxTheme = theme
             UserDefaults.standard.set(
                 String(decoding: data, as: UTF8.self), forKey: "Loffo.editorThemeJSON")

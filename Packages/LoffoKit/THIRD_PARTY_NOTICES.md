@@ -6,6 +6,8 @@ The language highlight query resources under `Sources/LoffoDocument/SyntaxQuerie
 - `swift.scm`: tree-sitter-swift 0.7.3-with-generated-files; Copyright (c) 2021 alex-pinkus.
 - `rust.scm`: tree-sitter-rust 0.24.2; Copyright (c) 2017 Maxim Sokolov.
 - `java.scm`: tree-sitter-java 0.23.5; Copyright (c) 2017 Ayman Nadeem.
+- `json.scm`: adapted from tree-sitter-json 0.24.8; Copyright (c) Max Brunsfeld and contributors.
+- `markdown.scm`: adapted from tree-sitter-markdown 0.5.1 and nvim-treesitter's Markdown query; their MIT notices apply.
 
 MIT License
 

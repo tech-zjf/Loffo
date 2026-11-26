@@ -1106,7 +1106,7 @@ final class TemporaryFolder: Sendable {
     #expect(strings.contains(Array("'e\u{301}'".utf8)))
 }
 
-@Test func syntaxHighlighterSupportsSwiftPythonRustAndJava() async {
+@Test func syntaxHighlighterSupportsCommonSourceLanguages() async {
     let fixtures: [(String, String)] = [
         ("swift", "// Swift\nstruct Reader { let count = 42 }\n"),
         ("py", "# Python\ndef read():\n    return 42\n"),
@@ -1125,10 +1125,74 @@ final class TemporaryFolder: Sendable {
     }
 }
 
+@Test func syntaxHighlighterColorsJSONData() async {
+    let text = "// Config\n{\"name\": \"Loffo\", \"enabled\": true, \"count\": 42}"
+    let syntax = TreeSyntax()
+    let spans = await syntax.highlights(
+        for: TextSnapshot(url: URL(fileURLWithPath: "/fixture/settings.jsonc"), version: 1, text: text))
+    #expect(spans.contains { $0.kind == .property })
+    #expect(spans.contains { $0.kind == .string })
+    #expect(spans.contains { $0.kind == .constant })
+    #expect(spans.contains { $0.kind == .number })
+    #expect(spans.contains { $0.kind == .comment })
+}
+
+@Test func syntaxHighlighterColorsMarkdownStructure() async {
+    let text = "# Heading\n\nRead [the guide](https://example.com).\n\n```swift\nlet count = 42\n```\n"
+    let syntax = TreeSyntax()
+    let spans = await syntax.highlights(
+        for: TextSnapshot(url: URL(fileURLWithPath: "/fixture/README.md"), version: 1, text: text))
+    #expect(spans.contains { $0.kind == .heading })
+    #expect(spans.contains { $0.kind == .markup })
+    #expect(spans.contains { $0.kind == .code })
+}
+
+@Test func markdownIncrementalTreesAreReusedAndReleasedOnLanguageChange() async {
+    let url = URL(fileURLWithPath: "/fixture/README.md")
+    let syntax = TreeSyntax()
+    let first = "# First\n\nRead [the guide](https://example.com).\n"
+    let second = "# Updated\n\nRead [the new guide](https://example.org).\n"
+    let firstSpans = await syntax.highlights(
+        for: TextSnapshot(url: url, version: 1, text: first))
+    let secondSpans = await syntax.highlights(
+        for: TextSnapshot(url: url, version: 2, text: second))
+    let freshSpans = await TreeSyntax().highlights(
+        for: TextSnapshot(url: url, version: 2, text: second))
+    #expect(!firstSpans.isEmpty)
+    #expect(secondSpans.map(\.kind).elementsEqual(freshSpans.map(\.kind)))
+    #expect(secondSpans.map(\.range).elementsEqual(freshSpans.map(\.range)))
+
+    let jsonSpans = await syntax.highlights(
+        for: TextSnapshot(
+            url: URL(fileURLWithPath: "/fixture/settings.json"), version: 3,
+            text: "{\"enabled\": true}"))
+    #expect(jsonSpans.contains { $0.kind == .property })
+    #expect(jsonSpans.contains { $0.kind == .constant })
+    #expect(await syntax.retainedQueryCount == 1)
+    await syntax.discardCachedTree()
+    #expect(await syntax.retainedQueryCount == 0)
+}
+
+@Test func typeScriptAndTSXKeepGrammarSpecificQueries() async {
+    let syntax = TreeSyntax()
+    let source = "const View = () => <Widget title=\"hello\" />"
+    let typeScriptURL = URL(fileURLWithPath: "/fixture/View.ts")
+    let tsxURL = URL(fileURLWithPath: "/fixture/View.tsx")
+    _ = await syntax.highlights(
+        for: TextSnapshot(url: typeScriptURL, version: 1, text: source))
+    let actual = await syntax.highlights(
+        for: TextSnapshot(url: tsxURL, version: 2, text: source))
+    let expected = await TreeSyntax().highlights(
+        for: TextSnapshot(url: tsxURL, version: 2, text: source))
+    #expect(actual.map(\.kind).elementsEqual(expected.map(\.kind)))
+    #expect(actual.map(\.range).elementsEqual(expected.map(\.range)))
+    #expect(await syntax.retainedQueryCount == 1)
+}
+
 @Test func vscodeThemeImportsCommonTextMateScopes() throws {
     let json =
         ##"{"settings":{"foreground":"#222222"},"tokenColors":[{"scope":["keyword.control","storage.type"],"settings":{"foreground":"#aa11bb"}},{"scope":"string.quoted","settings":{"foreground":"#22bb44"}},{"scope":"comment.line","settings":{"foreground":"#999999"}},{"scope":"constant.numeric","settings":{"foreground":"#123456"}},{"scope":"entity.name.type","settings":{"foreground":"#abcdef"}}]}"##
-    let theme = try EditorSyntaxTheme(vscodeJSON: Data(json.utf8))
+    let theme = try EditorSyntaxTheme(importing: Data(json.utf8))
     #expect(theme.hexColor(for: .keyword) == "#aa11bb")
     #expect(theme.hexColor(for: .string) == "#22bb44")
     #expect(theme.hexColor(for: .comment) == "#999999")
@@ -1140,17 +1204,28 @@ final class TemporaryFolder: Sendable {
 @Test func vscodeThemeImportsCallAndConstructorColors() throws {
     let json =
         ##"{"tokenColors":[{"scope":"entity.name.function","settings":{"foreground":"#112233"}},{"scope":"entity.name.type","settings":{"foreground":"#445566"}}]}"##
-    let theme = try EditorSyntaxTheme(vscodeJSON: Data(json.utf8))
+    let theme = try EditorSyntaxTheme(importing: Data(json.utf8))
     #expect(theme.hexColor(for: .functionCall) == "#112233")
     #expect(theme.hexColor(for: .constructor) == "#445566")
 }
 
 @Test func vscodeThemeImportsParameterColor() throws {
     let json = ##"{"tokenColors":[{"scope":"variable.parameter","settings":{"foreground":"#1234ab"}}]}"##
-    let theme = try EditorSyntaxTheme(vscodeJSON: Data(json.utf8))
+    let theme = try EditorSyntaxTheme(importing: Data(json.utf8))
     #expect(theme.hexColor(for: .parameter) == "#1234ab")
     #expect(theme.hexForeground == "000950")
     #expect(EditorSyntaxTheme.standard.hexColor(for: .type) == "000950")
+}
+
+@Test func zedThemeImportsSyntaxPalette() throws {
+    let json =
+        ##"{"name":"Imported","themes":[{"name":"Imported Light","appearance":"light","style":{"foreground":"#202124","syntax":{"keyword":{"color":"#a020f0"},"property":{"color":"#075985"},"constant":{"color":"#b45309"},"heading":{"color":"#111827"}}}}]}"##
+    let theme = try EditorSyntaxTheme(importing: Data(json.utf8))
+    #expect(theme.hexForeground == "#202124")
+    #expect(theme.hexColor(for: .keyword) == "#a020f0")
+    #expect(theme.hexColor(for: .property) == "#075985")
+    #expect(theme.hexColor(for: .constant) == "#b45309")
+    #expect(theme.hexColor(for: .heading) == "#111827")
 }
 
 @Test func foldedDiffCopyExcludesVirtualHeaders() async throws {

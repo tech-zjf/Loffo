@@ -2,11 +2,66 @@ import Foundation
 import LoffoDomain
 import OSLog
 import TreeSitter
+import TreeSitterJSON
 import TreeSitterJava
+import TreeSitterMarkdown
 import TreeSitterRust
 import TreeSitterSwift
 import TreeSitterTSX
 import TreeSitterTypeScript
+
+private enum SyntaxGrammar {
+    case typescript, tsx, json, markdown, swift, rust, java
+
+    var resourceName: String {
+        switch self {
+        case .typescript: "typescript"
+        case .tsx: "typescript"
+        case .json: "json"
+        case .markdown: "markdown"
+        case .swift: "swift"
+        case .rust: "rust"
+        case .java: "java"
+        }
+    }
+
+    var cacheKey: String {
+        switch self {
+        case .typescript: "typescript"
+        case .tsx: "tsx"
+        case .json: "json"
+        case .markdown: "markdown"
+        case .swift: "swift"
+        case .rust: "rust"
+        case .java: "java"
+        }
+    }
+
+    var language: OpaquePointer? {
+        switch self {
+        case .typescript: tree_sitter_typescript()
+        case .tsx: tree_sitter_tsx()
+        case .json: tree_sitter_json()
+        case .markdown: tree_sitter_markdown()
+        case .swift: tree_sitter_swift()
+        case .rust: tree_sitter_rust()
+        case .java: tree_sitter_java()
+        }
+    }
+
+    static func forExtension(_ ext: String) -> Self? {
+        switch ext {
+        case "ts", "js", "mjs", "cjs": .typescript
+        case "tsx", "jsx": .tsx
+        case "json", "jsonc": .json
+        case "md", "markdown", "mdown", "mkd": .markdown
+        case "swift": .swift
+        case "rs": .rust
+        case "java": .java
+        default: nil
+        }
+    }
+}
 
 /// One actor owns the parser and its editable tree. No C objects escape this boundary.
 public actor TreeSyntax: SyntaxProviding {
@@ -25,6 +80,7 @@ public actor TreeSyntax: SyntaxProviding {
     private let storage = ParserStorage()
     private var previous: TextSnapshot?
     var retainedSnapshot: TextSnapshot? { previous }
+    var retainedQueryCount: Int { storage.queryCount }
     private var languageExtension = ""
     private var cacheGeneration: UInt64 = 0
     private let admission: WorkAdmission
@@ -73,111 +129,59 @@ public actor TreeSyntax: SyntaxProviding {
         defer { if !retainingTree { discardTree() } }
         let ext = snapshot.url.pathExtension.lowercased()
         guard !Task.isCancelled else { return SyntaxHighlights(spans: [], isLimited: true) }
-        if ext == "py" || ext == "pyi" { return Self.pythonSpans(in: snapshot.text) }
+        if ext == "py" || ext == "pyi" {
+            discardTree()
+            return Self.pythonSpans(in: snapshot.text)
+        }
         guard let parser = storage.parser else { return SyntaxHighlights(spans: [], isLimited: true) }
         ts_parser_reset(parser)
-        let language: OpaquePointer?
-        switch ext {
-        case "ts", "js", "mjs", "cjs": language = tree_sitter_typescript()
-        case "tsx", "jsx": language = tree_sitter_tsx()
-        case "swift": language = tree_sitter_swift()
-        case "rs": language = tree_sitter_rust()
-        case "java": language = tree_sitter_java()
-        default: return SyntaxHighlights(spans: [], isLimited: false)
+        guard let grammar = SyntaxGrammar.forExtension(ext) else {
+            discardTree()
+            return SyntaxHighlights(spans: [], isLimited: false)
         }
+        let language = grammar.language
         guard ts_parser_set_language(parser, language) else {
             return SyntaxHighlights(spans: [], isLimited: true)
         }
         let bytes = Array(snapshot.text.utf8)
-        if let previous, previous.url == snapshot.url, languageExtension == ext, let tree = storage.tree {
+        let priorTree = storage.tree
+        let canReuseTrees = previous?.url == snapshot.url && languageExtension == ext && priorTree != nil
+        if let previous, previous.url == snapshot.url, languageExtension == ext,
+            let tree = priorTree
+        {
             var edit = Self.edit(from: Array(previous.text.utf8), to: bytes)
             ts_tree_edit(tree, &edit)
         } else {
             storage.clearTree()
         }
-        let tree = bytes.withUnsafeBytes { raw in
-            var input = ParseInput(
-                bytes: raw.baseAddress?.assumingMemoryBound(to: CChar.self), count: bytes.count,
-                deadline: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
-            return withUnsafeMutablePointer(to: &input) { context in
-                let source = TSInput(
-                    payload: context,
-                    read: { payload, offset, _, length in
-                        guard let payload, let length else { return nil }
-                        let input = payload.assumingMemoryBound(to: ParseInput.self).pointee
-                        let index = Int(offset)
-                        guard index < input.count, let bytes = input.bytes else {
-                            length.pointee = 0
-                            return nil
-                        }
-                        length.pointee = UInt32(input.count - index)
-                        return bytes.advanced(by: index)
-                    },
-                    encoding: TSInputEncodingUTF8, decode: nil)
-                let options = TSParseOptions(
-                    payload: context,
-                    progress_callback: { state in
-                        guard let payload = state?.pointee.payload else { return true }
-                        let deadline = payload.assumingMemoryBound(to: ParseInput.self).pointee.deadline
-                        return Task.isCancelled || DispatchTime.now().uptimeNanoseconds >= deadline
-                    })
-                return ts_parser_parse_with_options(parser, storage.tree, source, options)
-            }
-        }
-        storage.clearTree()
+        let reusableTree = canReuseTrees ? priorTree : nil
+        let tree = Self.parse(bytes, with: parser, oldTree: reusableTree)
+        if let reusableTree { ts_tree_delete(reusableTree) }
         guard let tree else {
             previous = nil
+            storage.clearTree()
             ts_parser_reset(parser)
             return SyntaxHighlights(spans: [], isLimited: true)
         }
         storage.tree = tree
         previous = snapshot
         languageExtension = ext
-        guard let query = storage.query(for: ext, language: language) else {
+        guard let query = storage.query(for: grammar) else {
             return SyntaxHighlights(spans: [], isLimited: true)
         }
         let cursor = storage.queryCursor
         guard let cursor else { return SyntaxHighlights(spans: [], isLimited: true) }
-        ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree))
         var pending: [PendingSpan] = []
-        var match = TSQueryMatch()
-        var captureIndex: UInt32 = 0
         var capturedCount = 0
-        var isLimited = false
-        while ts_query_cursor_next_capture(cursor, &match, &captureIndex) {
-            guard !Task.isCancelled else { return SyntaxHighlights(spans: [], isLimited: true) }
-            capturedCount += 1
-            guard capturedCount <= Self.spanLimit else {
-                isLimited = true
-                break
-            }
-            guard let captures = match.captures else { return SyntaxHighlights(spans: [], isLimited: true) }
-            let capture = captures[Int(captureIndex)]
-            var captureNameLength: UInt32 = 0
-            guard
-                let captureName = ts_query_capture_name_for_id(
-                    query, capture.index, &captureNameLength)
-            else {
-                continue
-            }
-            let nameBytes = UnsafeBufferPointer(
-                start: UnsafeRawPointer(captureName).assumingMemoryBound(to: UInt8.self),
-                count: Int(captureNameLength))
-            let name = String(decoding: nameBytes, as: UTF8.self)
-            guard let kind = Self.kind(capture: name, node: capture.node, extension: ext) else {
-                continue
-            }
-            let start = Int(ts_node_start_byte(capture.node))
-            let end = Int(ts_node_end_byte(capture.node))
-            if kind == .string, Self.isImportPath(capture.node) {
-                pending.append(PendingSpan(startByte: start, endByte: end, kind: .importPath))
-            } else if end <= bytes.count, start <= end {
-                pending.append(PendingSpan(startByte: start, endByte: end, kind: kind))
-            }
-        }
-        isLimited = isLimited || ts_query_cursor_did_exceed_match_limit(cursor)
+        let isLimited = Self.appendCaptures(
+            query: query, cursor: cursor, tree: tree, extension: ext, bytes: bytes,
+            pending: &pending, capturedCount: &capturedCount)
         pending.sort {
-            $0.startByte == $1.startByte ? $0.endByte > $1.endByte : $0.startByte < $1.startByte
+            if $0.startByte != $1.startByte { return $0.startByte < $1.startByte }
+            if $0.endByte != $1.endByte { return $0.endByte > $1.endByte }
+            if $0.kind == .property { return true }
+            if $1.kind == .property { return false }
+            return false
         }
         var nonOverlapping: [PendingSpan] = []
         nonOverlapping.reserveCapacity(pending.count)
@@ -192,11 +196,27 @@ public actor TreeSyntax: SyntaxProviding {
 
     private func discardTree() {
         storage.clearTree()
+        storage.clearQuery()
         previous = nil
         languageExtension = ""
     }
 
     private static func kind(capture: String, node: TSNode, extension ext: String) -> SyntaxKind? {
+        if ["json", "jsonc"].contains(ext), capture == "property" || capture == "string.special.key" {
+            return .property
+        }
+        if ["json", "jsonc"].contains(ext), capture == "constant" || capture.hasPrefix("constant.") {
+            return .constant
+        }
+        if ["md", "markdown", "mdown", "mkd"].contains(ext) {
+            switch capture {
+            case "heading": return .heading
+            case "markup": return .markup
+            case "link": return .link
+            case "code": return .code
+            default: break
+            }
+        }
         if capture == "identifier", ["ts", "tsx", "js", "jsx", "mjs", "cjs"].contains(ext) {
             if isParameterBinding(node) { return .parameter }
             let parent = ts_node_parent(node)
@@ -253,6 +273,81 @@ public actor TreeSyntax: SyntaxProviding {
     private static func isImportPath(_ node: TSNode) -> Bool {
         let parent = ts_node_parent(node)
         return !ts_node_is_null(parent) && String(cString: ts_node_type(parent)) == "import_statement"
+    }
+
+    private static func parse(
+        _ bytes: [UInt8], with parser: OpaquePointer, oldTree: OpaquePointer?
+    ) -> OpaquePointer? {
+        bytes.withUnsafeBytes { raw in
+            var input = ParseInput(
+                bytes: raw.baseAddress?.assumingMemoryBound(to: CChar.self), count: bytes.count,
+                deadline: DispatchTime.now().uptimeNanoseconds + 2_000_000_000)
+            return withUnsafeMutablePointer(to: &input) { context in
+                let source = TSInput(
+                    payload: context,
+                    read: { payload, offset, _, length in
+                        guard let payload, let length else { return nil }
+                        let input = payload.assumingMemoryBound(to: ParseInput.self).pointee
+                        let index = Int(offset)
+                        guard index < input.count, let bytes = input.bytes else {
+                            length.pointee = 0
+                            return nil
+                        }
+                        length.pointee = UInt32(input.count - index)
+                        return bytes.advanced(by: index)
+                    },
+                    encoding: TSInputEncodingUTF8, decode: nil)
+                let options = TSParseOptions(
+                    payload: context,
+                    progress_callback: { state in
+                        guard let payload = state?.pointee.payload else { return true }
+                        let deadline = payload.assumingMemoryBound(to: ParseInput.self).pointee.deadline
+                        return Task.isCancelled || DispatchTime.now().uptimeNanoseconds >= deadline
+                    })
+                return ts_parser_parse_with_options(parser, oldTree, source, options)
+            }
+        }
+    }
+
+    private static func appendCaptures(
+        query: OpaquePointer, cursor: OpaquePointer, tree: OpaquePointer,
+        extension ext: String, bytes: [UInt8], pending: inout [PendingSpan],
+        capturedCount: inout Int
+    ) -> Bool {
+        ts_query_cursor_exec(cursor, query, ts_tree_root_node(tree))
+        var match = TSQueryMatch()
+        var captureIndex: UInt32 = 0
+        var limited = false
+        while ts_query_cursor_next_capture(cursor, &match, &captureIndex) {
+            guard !Task.isCancelled else { return true }
+            capturedCount += 1
+            guard capturedCount <= spanLimit else {
+                limited = true
+                break
+            }
+            guard let captures = match.captures else { return true }
+            let capture = captures[Int(captureIndex)]
+            var captureNameLength: UInt32 = 0
+            guard
+                let captureName = ts_query_capture_name_for_id(
+                    query, capture.index, &captureNameLength)
+            else { continue }
+            let nameBytes = UnsafeBufferPointer(
+                start: UnsafeRawPointer(captureName).assumingMemoryBound(to: UInt8.self),
+                count: Int(captureNameLength))
+            let name = String(decoding: nameBytes, as: UTF8.self)
+            guard let kind = Self.kind(capture: name, node: capture.node, extension: ext) else {
+                continue
+            }
+            let start = Int(ts_node_start_byte(capture.node))
+            let end = Int(ts_node_end_byte(capture.node))
+            if kind == .string, Self.isImportPath(capture.node) {
+                pending.append(PendingSpan(startByte: start, endByte: end, kind: .importPath))
+            } else if end <= bytes.count, start <= end {
+                pending.append(PendingSpan(startByte: start, endByte: end, kind: kind))
+            }
+        }
+        return limited || ts_query_cursor_did_exceed_match_limit(cursor)
     }
 
     static func pythonSpans(in text: String, isCancelled: () -> Bool = { Task.isCancelled })
@@ -360,24 +455,19 @@ private final class ParserStorage {
     let parser = ts_parser_new()
     let queryCursor = ts_query_cursor_new()
     var tree: OpaquePointer?
-    private var queries: [String: OpaquePointer] = [:]
+    private var queryGrammar: String?
+    private var query: OpaquePointer?
 
     init() {
         if let queryCursor { ts_query_cursor_set_match_limit(queryCursor, UInt32(TreeSyntax.spanLimit)) }
     }
 
-    func query(for fileExtension: String, language: OpaquePointer?) -> OpaquePointer? {
-        let queryName: String
-        switch fileExtension {
-        case "ts", "tsx", "js", "jsx", "mjs", "cjs": queryName = "typescript"
-        case "swift": queryName = "swift"
-        case "rs": queryName = "rust"
-        case "java": queryName = "java"
-        default: return nil
-        }
-        if let cached = queries[queryName] { return cached }
+    func query(for grammar: SyntaxGrammar) -> OpaquePointer? {
+        if queryGrammar == grammar.cacheKey { return query }
+        clearQuery()
+        let queryName = grammar.resourceName
         guard
-            let language,
+            let language = grammar.language,
             let url = Bundle.module.url(forResource: queryName, withExtension: "scm"),
             let source = try? String(contentsOf: url, encoding: .utf8),
             source.utf8.count <= Int(UInt32.max)
@@ -387,8 +477,17 @@ private final class ParserStorage {
         let query = source.withCString {
             ts_query_new(language, $0, UInt32(source.utf8.count), &errorOffset, &errorType)
         }
-        if let query { queries[queryName] = query }
-        return query
+        self.query = query
+        queryGrammar = query == nil ? nil : grammar.cacheKey
+        return self.query
+    }
+
+    var queryCount: Int { query == nil ? 0 : 1 }
+
+    func clearQuery() {
+        if let query { ts_query_delete(query) }
+        query = nil
+        queryGrammar = nil
     }
 
     func clearTree() {
@@ -397,7 +496,7 @@ private final class ParserStorage {
     }
     deinit {
         clearTree()
-        for query in queries.values { ts_query_delete(query) }
+        clearQuery()
         if let queryCursor { ts_query_cursor_delete(queryCursor) }
         if let parser { ts_parser_delete(parser) }
     }
