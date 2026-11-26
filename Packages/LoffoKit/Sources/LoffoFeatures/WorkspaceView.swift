@@ -910,6 +910,7 @@ struct PathTooltipCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(width: size.width, height: size.height)
+        .scrollIndicators(.hidden)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .fixedSize()

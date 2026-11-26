@@ -1167,3 +1167,35 @@ final class TemporaryFolder: Sendable {
     }
     await #expect(throws: CancellationError.self) { try await syntax.value }
 }
+
+@Test func syntaxPoolPreservesConcurrentResultsAndReleasesTrees() async {
+    let admission = WorkAdmission(maximumJobs: 2)
+    let pool = SyntaxPool(admission: admission)
+    let snapshots = (0..<5).map { index in
+        TextSnapshot(
+            url: URL(fileURLWithPath: "/project-\(index)/file.ts"), version: 1,
+            text: "export const value\(index): string = \"hello\";\n")
+    }
+    await withTaskGroup(of: Bool.self) { group in
+        for snapshot in snapshots {
+            group.addTask {
+                let actual = await pool.highlightsWithStatus(for: snapshot)
+                let expected = await TreeSyntax().highlightsWithStatus(for: snapshot)
+                return !actual.isLimited
+                    && actual.spans.map(\.range) == expected.spans.map(\.range)
+                    && actual.spans.map(\.kind) == expected.spans.map(\.kind)
+            }
+        }
+        for await matches in group { #expect(matches) }
+    }
+    #if DEBUG
+        #expect(await pool.diagnosticCachedTreeCount <= 2)
+        #expect(await pool.diagnosticCachedTreeCount > 0)
+    #endif
+    await pool.discardCachedTrees()
+    #if DEBUG
+        #expect(await pool.diagnosticCachedTreeCount == 0)
+    #endif
+    #expect(await admission.activeJobs == 0)
+    #expect(await admission.admittedBytes == 0)
+}

@@ -21,7 +21,7 @@ import SwiftUI
 
 @MainActor private final class Services {
     let workspace: LocalWorkspace
-    let syntax: TreeSyntax
+    let syntax: SyntaxPool
     let diff: LineDiff
     let watcher = FileWatchHub()
     let readAdmission = WorkAdmission(maximumJobs: 4, maximumBytes: 4)
@@ -33,7 +33,7 @@ import SwiftUI
     init() {
         let admission = WorkAdmission()
         processingAdmission = admission
-        syntax = TreeSyntax(admission: admission)
+        syntax = SyntaxPool(admission: admission)
         diff = LineDiff(admission: admission)
         // Use an installed executable directly; never invoke the CLT installer shim.
         let supplied = ProcessInfo.processInfo.environment["LOFFO_GIT_EXECUTABLE"]
@@ -57,16 +57,16 @@ import SwiftUI
     fileprivate func discardReconstructibleCaches() async {
         previews.removeAll()
         async let snapshots: Void = workspace.discardCachedSnapshots()
-        async let tree: Void = syntax.discardCachedTree()
+        async let tree: Void = syntax.discardCachedTrees()
         _ = await (snapshots, tree)
     }
 
     #if DEBUG
         fileprivate func cacheDiagnostics() async -> [String: Int] {
             let snapshotBytes = await workspace.diagnosticCachedBytes
-            let hasTree = await syntax.diagnosticHasCachedTree
+            let treeCount = await syntax.diagnosticCachedTreeCount
             return [
-                "previewBytes": previews.bytes, "snapshotBytes": snapshotBytes, "syntaxTree": hasTree ? 1 : 0,
+                "previewBytes": previews.bytes, "snapshotBytes": snapshotBytes, "syntaxTree": treeCount,
             ]
         }
     #endif
