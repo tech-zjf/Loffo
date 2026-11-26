@@ -141,8 +141,8 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let hub = FileWatchHub()
     let count = WatchEventCounter()
-    let first = hub.observeWorkspace(root) {}
-    let second = hub.observeWorkspace(root) { count.count += 1 }
+    let first = await hub.observeWorkspace(root) {}
+    let second = await hub.observeWorkspace(root) { count.count += 1 }
     defer {
         first.cancel()
         second.cancel()
@@ -152,7 +152,7 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     for _ in 0..<800 where first.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(!first.isActive && !second.isActive)
     try FileManager.default.moveItem(at: moved, to: root)
-    first.retry()
+    await first.retry()
     #expect(first.isActive && second.isActive)
     first.cancel()
     #expect(second.isActive)
@@ -192,11 +192,11 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     #expect(!model.reviewed)
 }
 
-@Test @MainActor func watcherReportsMissingRootsAndCancelsLeases() throws {
+@Test @MainActor func watcherReportsMissingRootsAndCancelsLeases() async throws {
     let folder = try TemporaryFolder()
     let hub = FileWatchHub()
     let missing = folder.url.appendingPathComponent("missing")
-    let repository = hub.observeWorkspace(missing) {}
+    let repository = await hub.observeWorkspace(missing) {}
     let file = hub.observe(missing.appendingPathComponent("file")) {}
     #expect(!repository.isActive)
     #expect(!file.isActive)
@@ -204,11 +204,35 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     file.cancel()
     let existingParent = hub.observe(folder.url.appendingPathComponent("not-created-yet")) {}
     #expect(existingParent.isActive)
-    let existingRoot = hub.observeWorkspace(folder.url) {}
+    let existingRoot = await hub.observeWorkspace(folder.url) {}
     #expect(existingRoot.isActive)
     existingRoot.cancel()
     existingParent.cancel()
     #expect(!existingParent.isActive)
+}
+
+@Test @MainActor func repositoryStreamSetupIsOffMainActorAndCancelledStartsStayInactive() async throws {
+    let folder = try TemporaryFolder()
+    let setupStarted = OSAllocatedUnfairLock(initialState: false)
+    let gate = DispatchSemaphore(value: 0)
+    defer { gate.signal() }
+    let observation = RepositoryObservation(root: folder.url) { _, _ in
+        setupStarted.withLock { $0 = true }
+        _ = gate.wait(timeout: .now() + 5)
+        return StartedStream(stream: nil, started: false)
+    }
+    let start = Task { await observation.startIfNeeded() }
+    for _ in 0..<500 where !setupStarted.withLock({ $0 }) {
+        try await Task.sleep(for: .milliseconds(2))
+    }
+    #expect(setupStarted.withLock { $0 }, "Stream creation should run outside the main actor")
+
+    let actorProbe = Task { @MainActor in true }
+    #expect(await actorProbe.value, "Main actor work should continue while stream setup is pending")
+    observation.stop()
+    gate.signal()
+    await start.value
+    #expect(!observation.isActive, "A cancelled setup must not install its stream")
 }
 
 @Test func gitMetadataRelativePathsResolveInsideTheRepositoryDirectory() async throws {
@@ -1569,10 +1593,10 @@ private actor ChangingObservationPathsWorkspace: WorkspaceReading {
         self.trigger = trigger.resolvingSymlinksInPath().standardizedFileURL
         self.content = content
     }
-    func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
+    func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) async
         -> any ObservationLease
     {
-        hub.observeWorkspace(url, onChange: onChange)
+        await hub.observeWorkspace(url, onChange: onChange)
     }
     func observe(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) -> any ObservationLease {
         if !attempted && url.resolvingSymlinksInPath().standardizedFileURL == trigger {
@@ -3532,7 +3556,7 @@ private actor ScopedRefreshWorkspace: WorkspaceReading {
     }
     func observeWorkspaceChanges(
         _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
-    ) -> any ObservationLease {
+    ) async -> any ObservationLease {
         handler = onChange
         return ActiveTestLease()
     }
@@ -3650,7 +3674,7 @@ private actor HeldFullListingWorkspace: WorkspaceReading {
     try "let value = 1\n".write(to: file, atomically: false, encoding: .utf8)
     let observer = FileWatchHub()
     let recorder = WorkspaceEventRecorder()
-    let lease = observer.observeWorkspaceChanges(root) { recorder.changes.append($0) }
+    let lease = await observer.observeWorkspaceChanges(root) { recorder.changes.append($0) }
     defer { lease.cancel() }
     #expect(lease.isActive)
     let handle = try FileHandle(forWritingTo: file)

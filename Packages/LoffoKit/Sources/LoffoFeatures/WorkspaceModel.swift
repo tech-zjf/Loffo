@@ -48,6 +48,8 @@ public enum ChangesIndicator: Equatable {
     @Published public private(set) var hunkCursor = 0
     @Published public private(set) var reviewed = false
     @Published public private(set) var expandsContext = false
+    private var openingWorkspaceEpoch: UUID?
+    private var openingNeedsRescan = false
     private let workspace: any WorkspaceReading
     private let syntax: any SyntaxProviding
     private let diff: any DiffComputing
@@ -133,7 +135,15 @@ public enum ChangesIndicator: Equatable {
         projectEpoch = UUID()
         let epoch = projectEpoch
         listingGeneration = UUID()
-        let listingEpoch = listingGeneration
+        var listingEpoch = listingGeneration
+        openingWorkspaceEpoch = epoch
+        openingNeedsRescan = false
+        defer {
+            if openingWorkspaceEpoch == epoch {
+                openingWorkspaceEpoch = nil
+                openingNeedsRescan = false
+            }
+        }
         lease?.cancel()
         lease = nil
         gate.reset()
@@ -149,40 +159,93 @@ public enum ChangesIndicator: Equatable {
         fileTree = []
         root = url
         error = nil
-        repositoryLeases.append(
-            observer.observeWorkspaceChanges(url) { [weak self] change in self?.workspaceChanged(change) })
+        let rootLease = await observer.observeWorkspaceChanges(url) { [weak self] change in
+            guard let self, self.projectEpoch == epoch else { return }
+            self.workspaceChanged(change)
+        }
+        guard projectEpoch == epoch else {
+            rootLease.cancel()
+            return
+        }
+        repositoryLeases.append(rootLease)
         updateMonitoringStatus()
         do {
-            let listing = try await workspace.files(in: url)
+            let metadataRoots = try await workspace.repositoryObservationRoots(in: url)
             guard projectEpoch == epoch else { return }
-            let branch =
-                listing.usesGitIgnore ? try await workspace.branch(in: url) : L10n.text("Local folder")
-            guard projectEpoch == epoch else { return }
-            if listing.usesGitIgnore {
-                let metadataRoots = try await workspace.repositoryObservationRoots(in: url)
-                guard projectEpoch == epoch else { return }
-                let rootPath = url.resolvingSymlinksInPath().standardizedFileURL.path
-                var observedPaths = [rootPath]
-                for metadataRoot in metadataRoots.sorted(by: { $0.path.count < $1.path.count }) {
-                    let path = metadataRoot.path
-                    guard
-                        !observedPaths.contains(where: { observed in
-                            path == observed
-                                || path.hasPrefix(observed.hasSuffix("/") ? observed : observed + "/")
-                        })
-                    else { continue }
-                    repositoryLeases.append(
-                        observer.observeWorkspaceChanges(metadataRoot) { [weak self] change in
-                            self?.workspaceChanged(change)
-                        })
-                    observedPaths.append(path)
+            let rootPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+            var observedPaths = [rootPath]
+            for metadataRoot in metadataRoots.sorted(by: { $0.path.count < $1.path.count }) {
+                let path = metadataRoot.path
+                guard
+                    !observedPaths.contains(where: { observed in
+                        path == observed
+                            || path.hasPrefix(observed.hasSuffix("/") ? observed : observed + "/")
+                    })
+                else { continue }
+                let metadataLease = await observer.observeWorkspaceChanges(metadataRoot) {
+                    [weak self] change in
+                    guard let self, self.projectEpoch == epoch else { return }
+                    self.workspaceChanged(change)
                 }
-                guard try await bindStableRepositoryFiles(in: url, epoch: epoch, generation: listingEpoch)
-                else { return }
-                updateMonitoringStatus()
+                guard projectEpoch == epoch else {
+                    metadataLease.cancel()
+                    return
+                }
+                repositoryLeases.append(metadataLease)
+                observedPaths.append(path)
             }
-            let tree = await Task.detached { FileTreeNode.build(listing.files) }.value
-            guard projectEpoch == epoch, listingGeneration == listingEpoch else { return }
+            if !metadataRoots.isEmpty {
+                while true {
+                    openingNeedsRescan = false
+                    listingEpoch = listingGeneration
+                    guard
+                        try await bindStableRepositoryFiles(
+                            in: url, epoch: epoch, generation: listingEpoch
+                        )
+                    else {
+                        guard projectEpoch == epoch else { return }
+                        continue
+                    }
+                    guard projectEpoch == epoch else { return }
+                    guard listingGeneration == listingEpoch, !openingNeedsRescan else { continue }
+                    break
+                }
+            }
+
+            var listing: FileListing
+            var branch: String
+            var tree: [FileTreeNode]
+            while true {
+                openingNeedsRescan = false
+                listingEpoch = listingGeneration
+                listing = try await workspace.files(in: url)
+                guard projectEpoch == epoch else { return }
+                guard listingGeneration == listingEpoch else { continue }
+                branch =
+                    listing.usesGitIgnore
+                    ? try await workspace.branch(in: url) : L10n.text("Local folder")
+                guard projectEpoch == epoch else { return }
+                guard listingGeneration == listingEpoch else { continue }
+                if metadataRoots.isEmpty, listing.usesGitIgnore {
+                    openingNeedsRescan = false
+                    guard
+                        try await bindStableRepositoryFiles(
+                            in: url, epoch: epoch, generation: listingEpoch
+                        )
+                    else {
+                        guard projectEpoch == epoch else { return }
+                        continue
+                    }
+                    guard projectEpoch == epoch else { return }
+                    guard listingGeneration == listingEpoch, !openingNeedsRescan else { continue }
+                }
+                let paths = listing.files
+                tree = await Task.detached { FileTreeNode.build(paths) }.value
+                guard projectEpoch == epoch else { return }
+                guard listingGeneration == listingEpoch, !openingNeedsRescan else { continue }
+                break
+            }
+
             branchLabel = branch
             repositorySupportsChanges = listing.usesGitIgnore
             files = listing.files
@@ -239,9 +302,10 @@ public enum ChangesIndicator: Equatable {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard let self, self.projectEpoch == epoch else { return }
-                for lease in self.repositoryLeases { lease.retry() }
-                for lease in self.repositoryFileLeases.values { lease.retry() }
-                self.lease?.retry()
+                for lease in self.repositoryLeases { await lease.retry() }
+                for lease in self.repositoryFileLeases.values { await lease.retry() }
+                await self.lease?.retry()
+                guard self.projectEpoch == epoch else { return }
                 self.updateMonitoringStatus()
                 if self.monitoringAvailable {
                     self.monitoringRetry = nil
@@ -625,6 +689,10 @@ public enum ChangesIndicator: Equatable {
     }
 
     private func workspaceChanged(_ change: WorkspaceChange) {
+        if openingWorkspaceEpoch == projectEpoch {
+            openingNeedsRescan = true
+            return
+        }
         guard case .fileContents(let paths) = change, let root, completeListing != nil,
             !paths.isEmpty, fileListingWarning == nil, changesError == nil
         else {

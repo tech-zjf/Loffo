@@ -168,7 +168,7 @@ public struct ComparisonInput: Sendable {
 
 @MainActor public protocol ObservationLease: AnyObject {
     var isActive: Bool { get }
-    func retry()
+    func retry() async
     func cancel()
 }
 /// File content events are only emitted when every event in a batch is a regular-file modification.
@@ -177,25 +177,25 @@ public enum WorkspaceChange: Sendable {
     case fileContents([URL])
     case rescan
 }
-extension ObservationLease { public func retry() {} }
+extension ObservationLease { public func retry() async {} }
 @MainActor public protocol FileObserving: AnyObject {
-    func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
+    func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) async
         -> any ObservationLease
     func observe(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) -> any ObservationLease
     func observeWorkspaceChanges(
         _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
-    ) -> any ObservationLease
+    ) async -> any ObservationLease
 }
 
 extension FileObserving {
     public func observeWorkspaceChanges(
         _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
-    ) -> any ObservationLease {
-        observeWorkspace(url) { onChange(.rescan) }
+    ) async -> any ObservationLease {
+        await observeWorkspace(url) { onChange(.rescan) }
     }
-    public func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
-        -> any ObservationLease
-    {
+    public func observeWorkspace(
+        _ url: URL, onChange: @escaping @MainActor @Sendable () -> Void
+    ) async -> any ObservationLease {
         observe(url, onChange: onChange)
     }
 }

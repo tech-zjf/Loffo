@@ -38,24 +38,28 @@ import LoffoDomain
             cancel: { [weak self] in self?.release(key, id: id) })
     }
 
-    public func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void)
+    public func observeWorkspace(_ url: URL, onChange: @escaping @MainActor @Sendable () -> Void) async
         -> any ObservationLease
     {
-        observeWorkspaceChanges(url) { _ in onChange() }
+        await observeWorkspaceChanges(url) { _ in onChange() }
     }
 
     public func observeWorkspaceChanges(
         _ url: URL, onChange: @escaping @MainActor @Sendable (WorkspaceChange) -> Void
-    ) -> any ObservationLease {
+    ) async -> any ObservationLease {
         let key = url.standardizedFileURL
         let id = UUID()
         if repositories[key] == nil { repositories[key] = RepositoryObservation(root: key) }
-        repositories[key]?.listeners[id] = onChange
+        guard let observation = repositories[key] else {
+            return Lease(active: { false }, retry: {}, cancel: {})
+        }
+        observation.listeners[id] = onChange
+        await observation.startIfNeeded()
         return Lease(
-            active: { [weak self] in self?.repositories[key]?.isActive == true },
-            retry: { [weak self] in self?.retryRepository(key) },
+            active: { [weak observation] in observation?.isActive == true },
+            retry: { [weak self] in await self?.retryRepository(key) },
             cancel: { [weak self] in
-                self?.repositories[key]?.listeners.removeValue(forKey: id)
+                observation.listeners.removeValue(forKey: id)
                 if self?.repositories[key]?.listeners.isEmpty == true {
                     self?.repositories.removeValue(forKey: key)?.stop()
                 }
@@ -85,13 +89,10 @@ import LoffoDomain
         if entries[url]?.parent == nil { bindParent(url) }
         rebind(url)
     }
-    private func retryRepository(_ url: URL) {
+    private func retryRepository(_ url: URL) async {
         guard let previous = repositories[url], !previous.isActive else { return }
-        let replacement = RepositoryObservation(root: url)
-        guard replacement.isActive else { return }
-        replacement.listeners = previous.listeners
-        repositories[url] = replacement
         previous.stop()
+        await previous.startIfNeeded()
     }
     private func rebind(_ url: URL) {
         entries[url]?.file?.cancel()
@@ -165,14 +166,16 @@ import LoffoDomain
 @MainActor private final class Lease: ObservationLease {
     private var action: (() -> Void)?
     private let active: () -> Bool
-    private let retryAction: () -> Void
-    init(active: @escaping () -> Bool, retry: @escaping () -> Void, cancel: @escaping () -> Void) {
+    private let retryAction: () async -> Void
+    init(
+        active: @escaping () -> Bool, retry: @escaping () async -> Void, cancel: @escaping () -> Void
+    ) {
         self.active = active
         retryAction = retry
         action = cancel
     }
     var isActive: Bool { action != nil && active() }
-    func retry() { if action != nil && !isActive { retryAction() } }
+    func retry() async { if action != nil && !isActive { await retryAction() } }
     func cancel() {
         action?()
         action = nil

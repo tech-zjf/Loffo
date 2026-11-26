@@ -142,8 +142,9 @@ public actor LocalWorkspace: WorkspaceReading {
         guard let git else { return [] }
         var roots: Set<URL> = []
         // Parent .gitattributes files affect a project opened below the worktree root.
-        for argument in ["--absolute-git-dir", "--git-common-dir", "--show-toplevel"] {
+        for (index, argument) in ["--absolute-git-dir", "--git-common-dir", "--show-toplevel"].enumerated() {
             let result = try await git.run(["rev-parse", argument], at: root)
+            if result.status != 0, index == 0 { return [] }
             guard result.status == 0, var path = String(data: result.data, encoding: .utf8),
                 path.last == "\n"
             else { throw WorkspaceFailure.unavailable("Git metadata location is unavailable.") }
