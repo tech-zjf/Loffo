@@ -16,7 +16,7 @@ allowed = {
     'LoffoDesignSystem': {'SwiftUI'},
     'LoffoEditorUI': {'AppKit', 'OSLog', 'SwiftUI', 'Foundation', 'LoffoDomain', 'LoffoDesignSystem'},
     'LoffoFeatures': {
-        'Foundation', 'Combine', 'SwiftUI', 'AppKit', 'UniformTypeIdentifiers', 'LoffoDomain',
+        'Foundation', 'Combine', 'SwiftUI', 'AppKit', 'OSLog', 'UniformTypeIdentifiers', 'LoffoDomain',
         'LoffoEditorUI', 'LoffoDesignSystem',
     },
 }

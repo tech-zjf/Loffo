@@ -147,12 +147,14 @@ private struct DenseProjectionSyntax: SyntaxProviding {
         first.cancel()
         second.cancel()
     }
+    for _ in 0..<500 where !first.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(first.isActive && second.isActive)
     try FileManager.default.moveItem(at: root, to: moved)
     for _ in 0..<800 where first.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(!first.isActive && !second.isActive)
     try FileManager.default.moveItem(at: moved, to: root)
     await first.retry()
+    for _ in 0..<500 where !first.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(first.isActive && second.isActive)
     first.cancel()
     #expect(second.isActive)
@@ -192,6 +194,67 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     #expect(!model.reviewed)
 }
 
+@Test @MainActor func hunkNavigationTracksFoldedAndExpandedDiffRows() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("sample.swift")
+    let original = (0..<48).map { "line \($0)\n" }.joined()
+    try original.write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "."])
+    try fixture.run(["commit", "-m", "base"])
+
+    let updated =
+        original
+        .replacingOccurrences(of: "line 5\n", with: "changed 5\n")
+        .replacingOccurrences(of: "line 40\n", with: "changed 40\n")
+    try updated.write(to: file, atomically: true, encoding: .utf8)
+
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: fixture.git), syntax: TreeSyntax(), diff: LineDiff(),
+        observer: InactiveObserver())
+    defer { model.close() }
+    await model.open(fixture.folder.url)
+    model.setDiff(true)
+    model.select("sample.swift")
+    for _ in 0..<400 where model.presentation?.diff == nil || model.isRefreshingFiles {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.hunkCount == 2)
+    let foldedStarts = model.presentation?.hunkStarts ?? []
+    model.navigateHunk(1)
+    #expect(model.navigation?.line == foldedStarts.dropFirst().first)
+    model.navigateHunk(1)
+    #expect(model.navigation?.line == foldedStarts.first)
+
+    model.toggleContext()
+    for _ in 0..<400
+    where
+        model.isRefreshingFiles
+        || model.presentation.map({ $0.rows?.count == $0.diff?.lines.count }) != true
+    {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.expandsContext)
+    #expect(model.hunkCount == 2)
+    let expandedStarts = model.presentation?.hunkStarts ?? []
+    model.navigateHunk(1)
+    #expect(model.navigation?.line == expandedStarts.dropFirst().first)
+
+    model.toggleContext()
+    for _ in 0..<400
+    where
+        model.isRefreshingFiles
+        || model.presentation.map({ $0.rows?.count == $0.diff?.lines.count }) == true
+    {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(!model.expandsContext)
+    #expect(model.hunkCount == 2)
+    let refoldedStarts = model.presentation?.hunkStarts ?? []
+    model.navigateHunk(-1)
+    #expect(model.navigation?.line == refoldedStarts.first)
+}
+
 @Test @MainActor func watcherReportsMissingRootsAndCancelsLeases() async throws {
     let folder = try TemporaryFolder()
     let hub = FileWatchHub()
@@ -205,6 +268,7 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     let existingParent = hub.observe(folder.url.appendingPathComponent("not-created-yet")) {}
     #expect(existingParent.isActive)
     let existingRoot = await hub.observeWorkspace(folder.url) {}
+    for _ in 0..<500 where !existingRoot.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(existingRoot.isActive)
     existingRoot.cancel()
     existingParent.cancel()
@@ -214,14 +278,20 @@ private struct DenseProjectionSyntax: SyntaxProviding {
 @Test @MainActor func repositoryStreamSetupIsOffMainActorAndCancelledStartsStayInactive() async throws {
     let folder = try TemporaryFolder()
     let setupStarted = OSAllocatedUnfairLock(initialState: false)
+    let setupReturned = OSAllocatedUnfairLock(initialState: false)
+    let setupCount = OSAllocatedUnfairLock(initialState: 0)
     let gate = DispatchSemaphore(value: 0)
     defer { gate.signal() }
     let observation = RepositoryObservation(root: folder.url) { _, _ in
         setupStarted.withLock { $0 = true }
+        setupCount.withLock { $0 += 1 }
         _ = gate.wait(timeout: .now() + 5)
         return StartedStream(stream: nil, started: false)
     }
-    let start = Task { await observation.startIfNeeded() }
+    let start = Task {
+        await observation.startIfNeeded()
+        setupReturned.withLock { $0 = true }
+    }
     for _ in 0..<500 where !setupStarted.withLock({ $0 }) {
         try await Task.sleep(for: .milliseconds(2))
     }
@@ -229,6 +299,12 @@ private struct DenseProjectionSyntax: SyntaxProviding {
 
     let actorProbe = Task { @MainActor in true }
     #expect(await actorProbe.value, "Main actor work should continue while stream setup is pending")
+    for _ in 0..<100 where !setupReturned.withLock({ $0 }) {
+        try await Task.sleep(for: .milliseconds(2))
+    }
+    #expect(setupReturned.withLock { $0 }, "Opening must not wait for a blocked FSEvents setup")
+    await observation.startIfNeeded()
+    #expect(setupCount.withLock { $0 } == 1, "A pending FSEvents setup must not be restarted")
     observation.stop()
     gate.signal()
     await start.value
@@ -282,6 +358,33 @@ private struct DenseProjectionSyntax: SyntaxProviding {
     }
     #expect(model.monitoringAvailable && model.canReview && !model.reviewed)
     #expect(model.presentation?.text.contains("changed while away") == true)
+}
+
+@Test @MainActor func persistentlyMissingWorkspaceClearsAfterRecoveryGrace() async throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "present\n".write(
+        to: root.appendingPathComponent("sample.txt"), atomically: true, encoding: .utf8)
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: nil), syntax: TreeSyntax(), diff: LineDiff(),
+        observer: FileWatchHub())
+    defer { model.close() }
+    await model.open(root)
+    model.select("sample.txt")
+    for _ in 0..<500 where model.presentation?.text != "present\n" {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.presentation?.text == "present\n")
+
+    try FileManager.default.removeItem(at: root)
+    model.select("sample.txt")
+    for _ in 0..<900 where !model.files.isEmpty || model.selected != nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.files.isEmpty)
+    #expect(model.selected == nil)
+    #expect(model.presentation == nil)
 }
 
 private actor SlowFirstDiff: DiffComputing {
@@ -641,7 +744,7 @@ private struct LimitedSyntax: SyntaxProviding {
     var model: WorkspaceModel? = WorkspaceModel(
         workspace: LocalWorkspace(gitExecutable: nil), syntax: syntax, diff: LineDiff(),
         observer: FileWatchHub())
-    weak var weakModel = model
+    weak let weakModel = model
     await model?.open(folder.url)
     model?.select("sample.txt")
     for _ in 0..<300 where !(await syntax.started) || model?.isUpdating == true {
@@ -1189,6 +1292,127 @@ private struct LimitedSyntax: SyntaxProviding {
     #expect(!model.canReview)
 }
 
+@Test func updatedSubmoduleGitlinkIsExplicitlyUnavailableForTextDiff() async throws {
+    let dependency = try GitFixture()
+    let dependencyFile = dependency.folder.url.appendingPathComponent("file.txt")
+    try "base\n".write(to: dependencyFile, atomically: true, encoding: .utf8)
+    try dependency.run(["add", "file.txt"])
+    try dependency.run(["commit", "-m", "base"])
+
+    let fixture = try GitFixture()
+    try fixture.run([
+        "-c", "protocol.file.allow=always", "submodule", "add", dependency.folder.url.path, "dependency",
+    ])
+    try fixture.run(["commit", "-m", "add submodule"])
+
+    let nestedFile = fixture.folder.url.appendingPathComponent("dependency/file.txt")
+    try "updated\n".write(to: nestedFile, atomically: false, encoding: .utf8)
+    try fixture.run(["-C", "dependency", "add", "file.txt"])
+    try fixture.run(["-C", "dependency", "commit", "-m", "updated dependency"])
+    try fixture.run(["add", "dependency"])
+
+    let listing = try await LocalWorkspace(gitExecutable: fixture.git).changes(in: fixture.folder.url)
+    let submodule = try #require(listing.files.first(where: { $0.path == "dependency" }))
+    #expect(submodule.changeKind == .modified)
+    #expect(submodule.hasUnsupportedGitType)
+    #expect(!listing.isLimited)
+}
+
+@Test func deletedSubmoduleGitlinkIsExplicitlyUnavailableForTextDiff() async throws {
+    let dependency = try GitFixture()
+    try "base\n".write(
+        to: dependency.folder.url.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    try dependency.run(["add", "file.txt"])
+    try dependency.run(["commit", "-m", "base"])
+
+    let fixture = try GitFixture()
+    try fixture.run([
+        "-c", "protocol.file.allow=always", "submodule", "add", dependency.folder.url.path, "dependency",
+    ])
+    try fixture.run(["commit", "-m", "add submodule"])
+    try fixture.run(["rm", "-f", "dependency"])
+
+    let listing = try await LocalWorkspace(gitExecutable: fixture.git).changes(in: fixture.folder.url)
+    let submodule = try #require(listing.files.first(where: { $0.path == "dependency" }))
+    #expect(submodule.changeKind == .deleted)
+    #expect(submodule.hasUnsupportedGitType)
+    #expect(!listing.isLimited)
+}
+
+@Test func trackedTextFileReplacedBySubmoduleIsExplicitlyUnavailableForTextDiff() async throws {
+    let dependency = try GitFixture()
+    try "dependency\n".write(
+        to: dependency.folder.url.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    try dependency.run(["add", "file.txt"])
+    try dependency.run(["commit", "-m", "dependency"])
+
+    let fixture = try GitFixture()
+    let path = fixture.folder.url.appendingPathComponent("entry")
+    try "tracked text\n".write(to: path, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "entry"])
+    try fixture.run(["commit", "-m", "tracked text"])
+    try FileManager.default.removeItem(at: path)
+    try fixture.run(["rm", "-f", "entry"])
+    try fixture.run([
+        "-c", "protocol.file.allow=always", "submodule", "add", dependency.folder.url.path, "entry",
+    ])
+
+    let listing = try await LocalWorkspace(gitExecutable: fixture.git).changes(in: fixture.folder.url)
+    let converted = try #require(listing.files.first(where: { $0.path == "entry" }))
+    #expect(converted.changeKind == .modified)
+    #expect(converted.hasUnsupportedGitType)
+    #expect(!listing.isLimited)
+    try await assertUnsupportedGitEntryCannotBeReviewed("entry", in: fixture)
+}
+
+@Test func submoduleGitlinkReplacedByTrackedTextFileIsExplicitlyUnavailableForTextDiff() async throws {
+    let dependency = try GitFixture()
+    try "dependency\n".write(
+        to: dependency.folder.url.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    try dependency.run(["add", "file.txt"])
+    try dependency.run(["commit", "-m", "dependency"])
+
+    let fixture = try GitFixture()
+    try fixture.run([
+        "-c", "protocol.file.allow=always", "submodule", "add", dependency.folder.url.path, "entry",
+    ])
+    try fixture.run(["add", ".gitmodules", "entry"])
+    try fixture.run(["commit", "-m", "tracked submodule"])
+    try fixture.run(["rm", "-f", "entry"])
+    try "replacement text\n".write(
+        to: fixture.folder.url.appendingPathComponent("entry"), atomically: true, encoding: .utf8)
+    try fixture.run(["add", "entry"])
+
+    let listing = try await LocalWorkspace(gitExecutable: fixture.git).changes(in: fixture.folder.url)
+    let converted = try #require(listing.files.first(where: { $0.path == "entry" }))
+    #expect(converted.changeKind == .modified)
+    #expect(converted.hasUnsupportedGitType)
+    #expect(!listing.isLimited)
+    try await assertUnsupportedGitEntryCannotBeReviewed("entry", in: fixture)
+}
+
+@MainActor private func assertUnsupportedGitEntryCannotBeReviewed(
+    _ path: String, in fixture: GitFixture
+) async throws {
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: fixture.git), syntax: TreeSyntax(), diff: LineDiff(),
+        observer: FileWatchHub())
+    defer { model.close() }
+    await model.open(fixture.folder.url)
+    model.setDiff(true)
+    for _ in 0..<400 where !model.changedFiles.contains(where: { $0.path == path }) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.changedFiles.first(where: { $0.path == path })?.hasUnsupportedGitType == true)
+    model.select(path)
+    for _ in 0..<400 where model.error == nil { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(model.error?.contains("Symbolic links and submodules") == true)
+    #expect(model.presentation == nil)
+    #expect(!model.canReview)
+    model.markReviewed()
+    #expect(!model.reviewed)
+}
+
 private final class GitFixture {
     let folder: TemporaryFolder
     let git: URL
@@ -1570,6 +1794,489 @@ private actor ChangingObservationPathsWorkspace: WorkspaceReading {
     #expect(model.error == nil)
 }
 
+private actor DelayedRootIdentityWorkspace: WorkspaceReading {
+    let delayedRoot: URL
+    let delayedIdentity: WorkspaceRootIdentity
+    let currentIdentity: WorkspaceRootIdentity
+    private var delayedIdentityStarted = false
+    private var releaseDelayedIdentity: CheckedContinuation<Void, Never>?
+    private(set) var lastReadIdentity: WorkspaceRootIdentity?
+
+    init(delayedRoot: URL, delayedIdentity: WorkspaceRootIdentity, currentIdentity: WorkspaceRootIdentity) {
+        self.delayedRoot = delayedRoot
+        self.delayedIdentity = delayedIdentity
+        self.currentIdentity = currentIdentity
+    }
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? {
+        guard root.standardizedFileURL.path == delayedRoot.standardizedFileURL.path else {
+            return currentIdentity
+        }
+        delayedIdentityStarted = true
+        await withCheckedContinuation { releaseDelayedIdentity = $0 }
+        return delayedIdentity
+    }
+
+    func hasStartedDelayedIdentity() -> Bool { delayedIdentityStarted }
+
+    func releaseDelayedIdentityLookup() {
+        releaseDelayedIdentity?.resume()
+        releaseDelayedIdentity = nil
+    }
+
+    func files(in root: URL) async throws -> FileListing {
+        FileListing(files: [ProjectFile(path: "sample.swift")], isLimited: false, usesGitIgnore: false)
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "sample")
+    }
+
+    func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot {
+        lastReadIdentity = expectedRootIdentity
+        return TextSnapshot(url: root.appendingPathComponent(path), version: 1, text: "sample")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "", after: workingText, label: "HEAD")
+    }
+}
+
+private actor RootReplacedDuringListingWorkspace: WorkspaceReading {
+    private var identity = WorkspaceRootIdentity(device: 1, inode: 10)
+    private var listingStarted = false
+    private var releaseListing: CheckedContinuation<Void, Never>?
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? { identity }
+
+    func files(in root: URL) async throws -> FileListing {
+        listingStarted = true
+        await withCheckedContinuation { releaseListing = $0 }
+        return FileListing(
+            files: [ProjectFile(path: "from-replacement.swift")], isLimited: false, usesGitIgnore: false)
+    }
+
+    func hasStartedListing() -> Bool { listingStarted }
+
+    func replaceRoot() {
+        identity = WorkspaceRootIdentity(device: 1, inode: 11)
+    }
+
+    func releaseFileListing() {
+        releaseListing?.resume()
+        releaseListing = nil
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "replacement")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "", after: workingText, label: "HEAD")
+    }
+}
+
+@Test @MainActor func initialListingRejectsWorkspaceRootReplacement() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringListingWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+
+    let opening = Task { await model.open(folder.url) }
+    for _ in 0..<500 where !(await workspace.hasStartedListing()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedListing())
+
+    await workspace.replaceRoot()
+    await workspace.releaseFileListing()
+    await opening.value
+
+    #expect(model.files.isEmpty, "A listing from a replacement directory must not be published")
+    #expect(
+        model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription
+            || model.error == WorkspaceFailure.workspaceRootChangedWhileOpening.localizedDescription)
+}
+
+private actor RootReplacedDuringRefreshWorkspace: WorkspaceReading {
+    private var identity = WorkspaceRootIdentity(device: 1, inode: 20)
+    private var listingCount = 0
+    private var refreshListingStarted = false
+    private var releaseRefreshListing: CheckedContinuation<Void, Never>?
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? { identity }
+
+    func files(in root: URL) async throws -> FileListing {
+        listingCount += 1
+        if listingCount == 2 {
+            refreshListingStarted = true
+            await withCheckedContinuation { releaseRefreshListing = $0 }
+        }
+        let path = listingCount == 1 ? "original.swift" : "replacement.swift"
+        return FileListing(files: [ProjectFile(path: path)], isLimited: false, usesGitIgnore: false)
+    }
+
+    func hasStartedRefreshListing() -> Bool { refreshListingStarted }
+
+    func replaceRoot() {
+        identity = WorkspaceRootIdentity(device: 1, inode: 21)
+    }
+
+    func releaseFileListing() {
+        releaseRefreshListing?.resume()
+        releaseRefreshListing = nil
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "replacement")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "", after: workingText, label: "HEAD")
+    }
+}
+
+@Test @MainActor func refreshedListingClearsWorkspaceAfterRootReplacement() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringRefreshWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+    #expect(model.files.map(\.path) == ["original.swift"])
+
+    model.refreshFiles(immediate: true)
+    for _ in 0..<500 where !(await workspace.hasStartedRefreshListing()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedRefreshListing())
+
+    await workspace.replaceRoot()
+    await workspace.releaseFileListing()
+    for _ in 0..<500 where model.isRefreshingFiles {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.files.isEmpty, "Rows from a replaced workspace must be removed")
+    #expect(model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription)
+    #expect(model.selected == nil)
+    #expect(!model.monitoringAvailable, "A replaced root must not retain a healthy-watch status")
+}
+
+private actor RootReplacedDuringHistoryWorkspace: WorkspaceReading {
+    private var identity = WorkspaceRootIdentity(device: 1, inode: 30)
+    private var historyStarted = false
+    private var releaseHistory: CheckedContinuation<[FileCommit], Never>?
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? { identity }
+
+    func files(in root: URL) async throws -> FileListing {
+        FileListing(files: [ProjectFile(path: "sample.swift")], isLimited: false, usesGitIgnore: false)
+    }
+
+    func history(in root: URL, path: String) async throws -> [FileCommit] {
+        historyStarted = true
+        return await withCheckedContinuation { releaseHistory = $0 }
+    }
+
+    func hasStartedHistory() -> Bool { historyStarted }
+
+    func replaceRoot() {
+        identity = WorkspaceRootIdentity(device: 1, inode: 31)
+    }
+
+    func releaseFileHistory() {
+        releaseHistory?.resume(returning: [FileCommit(id: "old-root", subject: "stale history")])
+        releaseHistory = nil
+    }
+
+    func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot {
+        TextSnapshot(url: root.appendingPathComponent(path), version: 1, text: "contents")
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "contents")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "", after: workingText, label: "HEAD")
+    }
+}
+
+@Test @MainActor func fileHistoryRejectsPublicationAfterWorkspaceRootReplacement() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringHistoryWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+
+    model.select("sample.swift")
+    for _ in 0..<500 where !(await workspace.hasStartedHistory()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedHistory())
+
+    await workspace.replaceRoot()
+    await workspace.releaseFileHistory()
+    for _ in 0..<500 where model.error == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription)
+    #expect(model.files.isEmpty)
+    #expect(model.selected == nil)
+    #expect(model.history.isEmpty, "History from the replaced directory must not be published")
+    #expect(!model.monitoringAvailable)
+}
+
+private actor RootReplacedDuringRepositoryHistoryWorkspace: WorkspaceReading {
+    private var identity = WorkspaceRootIdentity(device: 1, inode: 40)
+    private var repositoryHistoryStarted = false
+    private var releaseRepositoryHistory: CheckedContinuation<RepositoryHistoryPage, Never>?
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? { identity }
+
+    func files(in root: URL) async throws -> FileListing {
+        FileListing(
+            files: [ProjectFile(path: "tracked.swift")], isLimited: false, usesGitIgnore: true,
+            revision: "fixed-revision")
+    }
+
+    func changes(in root: URL) async throws -> FileListing {
+        FileListing(files: [], isLimited: false, usesGitIgnore: true, revision: "fixed-revision")
+    }
+
+    func repositoryHistory(
+        in root: URL, revision: String?, offset: Int, limit: Int
+    ) async throws -> RepositoryHistoryPage {
+        repositoryHistoryStarted = true
+        return await withCheckedContinuation { releaseRepositoryHistory = $0 }
+    }
+
+    func hasStartedRepositoryHistory() -> Bool { repositoryHistoryStarted }
+
+    func replaceRoot() {
+        identity = WorkspaceRootIdentity(device: 1, inode: 41)
+    }
+
+    func releaseHistoryPage() {
+        let page = RepositoryHistoryPage(
+            revision: "fixed-revision",
+            commits: [FileCommit(id: "old-root", subject: "stale repository history")],
+            nextOffset: 1,
+            hasMore: false)
+        releaseRepositoryHistory?.resume(returning: page)
+        releaseRepositoryHistory = nil
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "contents")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "old contents", after: workingText, label: "HEAD", revision: "fixed-revision")
+    }
+}
+
+@Test @MainActor func repositoryHistoryRejectsPublicationAfterWorkspaceRootReplacement() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringRepositoryHistoryWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+    model.setDiff(true)
+
+    for _ in 0..<500 where !(await workspace.hasStartedRepositoryHistory()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedRepositoryHistory())
+
+    await workspace.replaceRoot()
+    await workspace.releaseHistoryPage()
+    for _ in 0..<500 where model.error == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription)
+    #expect(model.files.isEmpty)
+    #expect(model.repositoryHistory.isEmpty, "History from the replaced directory must not be published")
+    #expect(!model.repositoryHistoryIsLoading)
+    #expect(!model.monitoringAvailable)
+}
+
+private actor RootReplacedDuringChangesWorkspace: WorkspaceReading {
+    private var identity = WorkspaceRootIdentity(device: 1, inode: 50)
+    private var rootIsUnavailable = false
+    private var rootChangedWhileOpening = false
+    private var changesStarted = false
+    private var releaseChanges: CheckedContinuation<FileListing, Never>?
+
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? {
+        guard !rootChangedWhileOpening else {
+            throw WorkspaceFailure.workspaceRootChangedWhileOpening
+        }
+        guard !rootIsUnavailable else {
+            throw WorkspaceFailure.unavailable("The opened folder is no longer available.")
+        }
+        return identity
+    }
+
+    func files(in root: URL) async throws -> FileListing {
+        FileListing(
+            files: [ProjectFile(path: "tracked.swift")], isLimited: false, usesGitIgnore: true,
+            revision: "before-scan")
+    }
+
+    func changes(in root: URL) async throws -> FileListing {
+        changesStarted = true
+        return await withCheckedContinuation { releaseChanges = $0 }
+    }
+
+    func hasStartedChanges() -> Bool { changesStarted }
+
+    func replaceRoot() {
+        identity = WorkspaceRootIdentity(device: 1, inode: 51)
+    }
+
+    func makeRootUnavailable() {
+        rootIsUnavailable = true
+    }
+
+    func changeRootDuringIdentityProbe() {
+        rootChangedWhileOpening = true
+    }
+
+    func releaseChangesListing() {
+        let listing = FileListing(
+            files: [ProjectFile(path: "stale-change.swift")], isLimited: false,
+            usesGitIgnore: true, revision: "before-scan")
+        releaseChanges?.resume(returning: listing)
+        releaseChanges = nil
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "contents")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "old contents", after: workingText, label: "HEAD", revision: "before-scan")
+    }
+}
+
+@Test @MainActor func changesScanRejectsPublicationAfterWorkspaceRootReplacement() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringChangesWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+    for _ in 0..<500 where !(await workspace.hasStartedChanges()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedChanges())
+
+    await workspace.replaceRoot()
+    await workspace.releaseChangesListing()
+    for _ in 0..<500 where model.error == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription)
+    #expect(model.files.isEmpty)
+    #expect(model.changedFiles.isEmpty, "Changes from the replaced directory must not be published")
+    #expect(!model.monitoringAvailable)
+}
+
+@Test @MainActor func changesScanDoesNotClearWorkspaceWhenIdentityCheckIsTemporarilyUnavailable() async throws
+{
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringChangesWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+    for _ in 0..<500 where !(await workspace.hasStartedChanges()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedChanges())
+
+    await workspace.makeRootUnavailable()
+    await workspace.releaseChangesListing()
+    for _ in 0..<500 where model.error == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.error == nil)
+    #expect(model.changesError == "The opened folder is no longer available.")
+    #expect(model.files.map(\.path) == ["tracked.swift"])
+    #expect(model.changedFiles.isEmpty)
+    #expect(model.monitoringAvailable)
+}
+
+@Test @MainActor func changesScanClearsWorkspaceWhenRootChangesDuringIdentityProbe() async throws {
+    let folder = try TemporaryFolder()
+    let workspace = RootReplacedDuringChangesWorkspace()
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(folder.url)
+    for _ in 0..<500 where !(await workspace.hasStartedChanges()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedChanges())
+
+    await workspace.changeRootDuringIdentityProbe()
+    await workspace.releaseChangesListing()
+    for _ in 0..<500 where model.error == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(model.error == WorkspaceFailure.workspaceRootChanged.localizedDescription)
+    #expect(model.files.isEmpty)
+    #expect(model.changedFiles.isEmpty)
+    #expect(!model.monitoringAvailable)
+}
+
+@Test @MainActor func staleWorkspaceRootIdentityCannotOverwriteNewerOpen() async throws {
+    let folder = try TemporaryFolder()
+    let delayedRoot = folder.url.appendingPathComponent("old", isDirectory: true)
+    let currentRoot = folder.url.appendingPathComponent("current", isDirectory: true)
+    let delayedIdentity = WorkspaceRootIdentity(device: 1, inode: 11)
+    let currentIdentity = WorkspaceRootIdentity(device: 1, inode: 22)
+    let workspace = DelayedRootIdentityWorkspace(
+        delayedRoot: delayedRoot, delayedIdentity: delayedIdentity, currentIdentity: currentIdentity)
+    let model = WorkspaceModel(
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+
+    let staleOpen = Task { await model.open(delayedRoot) }
+    for _ in 0..<500 where !(await workspace.hasStartedDelayedIdentity()) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.hasStartedDelayedIdentity())
+
+    await model.open(currentRoot)
+    #expect(model.root?.standardizedFileURL.path == currentRoot.standardizedFileURL.path)
+    await workspace.releaseDelayedIdentityLookup()
+    await staleOpen.value
+
+    model.select("sample.swift")
+    for _ in 0..<500 where model.presentation?.text != "sample" {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.presentation?.text == "sample")
+    #expect(await workspace.lastReadIdentity == currentIdentity)
+}
+
 @Test @MainActor func unstableObservationPathsFailExplicitly() async throws {
     let folder = try TemporaryFolder()
     let workspace = ChangingObservationPathsWorkspace(
@@ -1789,7 +2496,14 @@ private actor FailingListingWorkspace: WorkspaceReading {
         try await Task.sleep(for: .milliseconds(10))
     }
     try #require(model.files.contains { $0.path == "sample.swift" })
+    for _ in 0..<500 where model.isRefreshingFiles { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!model.isRefreshingFiles)
     model.select("sample.swift")
+    for _ in 0..<500 where model.presentation?.text != "old\n" || model.isUpdating {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.presentation?.text == "old\n")
+    #expect(!model.isUpdating)
     let initialRevision = model.fileTreeRevision
     try "changed\n".write(to: file, atomically: true, encoding: .utf8)
     model.refreshFiles(immediate: true)
@@ -1909,7 +2623,7 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     let second = try TemporaryFolder()
     let workspace = CancellableListingWorkspace()
     let model = WorkspaceModel(
-        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: FileWatchHub())
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
     defer { model.close() }
     await model.open(first.url)
     await workspace.setHoldCancellation(true)
@@ -1937,7 +2651,7 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     let folder = try TemporaryFolder()
     let workspace = DelayedListingWorkspace()
     let model = WorkspaceModel(
-        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: FileWatchHub())
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
     defer { model.close() }
     await model.open(folder.url)
     model.setDiff(true)
@@ -1986,7 +2700,7 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     let workspace = DelayedListingWorkspace()
     await workspace.prepareFiles(["stale.swift"])
     let model = WorkspaceModel(
-        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: FileWatchHub())
+        workspace: workspace, syntax: TreeSyntax(), diff: LineDiff(), observer: ActiveTestObserver())
     defer { model.close() }
     var publishedStale = false
     let subscription = model.$files.sink { files in
@@ -2552,7 +3266,9 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     let environment = [
         "HOME": external.url.path, "XDG_CONFIG_HOME": configHome.path, "PATH": "/usr/bin:/bin",
     ]
-    let workspace = LocalWorkspace(gitExecutable: wrapper, environment: environment)
+    let workspace = LocalWorkspace(
+        gitExecutable: wrapper, environment: environment,
+        gitTimeoutNanoseconds: 20_000_000_000)
     let observed = try await workspace.repositoryObservationFiles(in: fixture.folder.url)
     #expect(observed.contains { $0.path.hasSuffix("/xdg") })
     let file = fixture.folder.url.appendingPathComponent("sample.swift")
@@ -3005,6 +3721,39 @@ private actor CancellableListingWorkspace: WorkspaceReading {
         !FileManager.default.fileExists(atPath: fixture.folder.url.appendingPathComponent("filter-ran").path))
 }
 
+@Test func changesRefuseCleanSmudgeProcessAndRequiredFilterDriversBeforeExecution() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("file.ts")
+    let attributes = fixture.folder.url.appendingPathComponent(".gitattributes")
+    try "old\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "."])
+    try fixture.run(["commit", "-m", "baseline"])
+    try "new\n".write(to: file, atomically: true, encoding: .utf8)
+
+    try fixture.run(["config", "filter.lfs.clean", "touch lfs-clean-ran; cat"])
+    try fixture.run(["config", "filter.lfs.smudge", "touch lfs-smudge-ran; cat"])
+    try fixture.run(["config", "filter.lfs.process", "touch lfs-process-ran; exit 0"])
+    try fixture.run(["config", "filter.lfs.required", "true"])
+    try "*.ts filter=lfs\n".write(to: attributes, atomically: true, encoding: .utf8)
+
+    do {
+        _ = try await LocalWorkspace(gitExecutable: fixture.git).changes(in: fixture.folder.url)
+        Issue.record("Configured clean/smudge/process filters must make Changes explicitly limited")
+    } catch let failure as WorkspaceFailure {
+        guard case .unsupportedComparison = failure else {
+            Issue.record("Expected filter configuration to be refused before Git conversions")
+            return
+        }
+    }
+
+    for marker in ["lfs-clean-ran", "lfs-smudge-ran", "lfs-process-ran"] {
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: fixture.folder.url.appendingPathComponent(marker).path),
+            "Git filter driver unexpectedly executed (marker)")
+    }
+}
+
 @Test func gitChangesAndBaselineStayInsideOpenedSubdirectory() async throws {
     let fixture = try GitFixture()
     let inside = fixture.folder.url.appendingPathComponent("Sources/Core/file.swift")
@@ -3058,7 +3807,7 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
     let runner = GitRunner(executable: executable)
     let task = Task { try await runner.run(["--version"], at: folder.url) }
-    for _ in 0..<400 where FileManager.default.contents(atPath: childFile.path)?.isEmpty ?? true {
+    for _ in 0..<2_000 where FileManager.default.contents(atPath: childFile.path)?.isEmpty ?? true {
         try await Task.sleep(for: .milliseconds(5))
     }
     let childText = try String(contentsOf: childFile, encoding: .utf8)
@@ -3101,6 +3850,7 @@ private actor CancellableListingWorkspace: WorkspaceReading {
     let child = try #require(Int32(String(contentsOf: childFile, encoding: .utf8)))
     defer { if kill(child, 0) == 0 { kill(child, SIGKILL) } }
     #expect(output.status == 0)
+    #expect(kill(child, 0) != 0, "GitRunner must wait for same-group descendants to close output pipes")
     for _ in 0..<200 where kill(child, 0) == 0 { try await Task.sleep(for: .milliseconds(5)) }
     #expect(kill(child, 0) != 0, "A completed Git command must not leave its child running")
 }
@@ -3328,6 +4078,53 @@ private actor HeldFirstReadWorkspace: WorkspaceReading {
     }
 }
 
+private actor HeldCancellableReadWorkspace: WorkspaceReading {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var started = false
+
+    func files(in root: URL) async throws -> FileListing {
+        FileListing(files: [], isLimited: false, usesGitIgnore: false)
+    }
+
+    func read(_ url: URL) async throws -> TextSnapshot {
+        TextSnapshot(url: url, version: 1, text: "latest\n")
+    }
+
+    func read(in root: URL, path: String, allowMissing: Bool) async throws -> TextSnapshot {
+        started = true
+        await withCheckedContinuation { continuation = $0 }
+        return TextSnapshot(url: root.appendingPathComponent(path), version: 1, text: "latest\n")
+    }
+
+    func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput {
+        ComparisonInput(before: "", after: workingText, label: "HEAD")
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+@Test @MainActor func temporaryCancellableReadCoordinatorSurvivesSlowProvider() async throws {
+    let root = try TemporaryFolder().url
+    let workspace = HeldCancellableReadWorkspace()
+    let task = Task { @MainActor in
+        try await CancellableRead().run(
+            workspace: workspace, windowAdmission: WorkAdmission(maximumBytes: 1),
+            appAdmission: WorkAdmission(maximumBytes: 1), root: root, path: "slow.swift",
+            allowMissing: false)
+    }
+    for _ in 0..<300 where !(await workspace.started) {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await workspace.started)
+    try await Task.sleep(for: .milliseconds(100))
+    await workspace.release()
+    let snapshot = try await task.value
+    #expect(snapshot.text == "latest\n")
+}
+
 @Test @MainActor func occludedExplicitSelectionSurvivesBackgroundInvalidation() async throws {
     let folder = try TemporaryFolder()
     try "const value = 1;\n".write(
@@ -3437,6 +4234,199 @@ private actor HeldFirstReadWorkspace: WorkspaceReading {
         #expect(date >= started && date <= Date())
     }
     #expect(try await workspace.history(in: fixture.folder.url, path: "not-present.ts").isEmpty)
+}
+
+@Test func repositoryHistoryPagesStayPinnedToHeadAndAreBounded() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("history.swift")
+    let workspace = LocalWorkspace(gitExecutable: fixture.git)
+    for index in 0..<32 {
+        try "let value = \(index)\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.run(["add", "history.swift"])
+        try fixture.run(["commit", "-m", "commit \(index)"])
+    }
+    let first = try await workspace.repositoryHistory(
+        in: fixture.folder.url, revision: nil, offset: 0, limit: 30)
+    #expect(first.commits.count == 30)
+    #expect(first.commits.first?.subject == "commit 31")
+    #expect(first.nextOffset == 30 && first.hasMore)
+    let second = try await workspace.repositoryHistory(
+        in: fixture.folder.url, revision: first.revision, offset: first.nextOffset, limit: 30)
+    #expect(second.commits.count == 2)
+    #expect(second.commits.first?.subject == "commit 1")
+    #expect(!second.hasMore)
+    try "let value = 33\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "history.swift"])
+    try fixture.run(["commit", "-m", "new head"])
+    await #expect(throws: WorkspaceFailure.self) {
+        try await workspace.repositoryHistory(
+            in: fixture.folder.url, revision: first.revision, offset: first.nextOffset, limit: 30)
+    }
+}
+
+@Test func repositoryHistoryWorksWithDetachedHead() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("history.swift")
+    try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "history.swift"])
+    try fixture.run(["commit", "-m", "detached baseline"])
+    let detachedRevision = String(
+        decoding: try fixture.runCapture(["rev-parse", "HEAD"]), as: UTF8.self
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+    try "let value = 2\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "history.swift"])
+    try fixture.run(["commit", "-m", "branch tip"])
+    try fixture.run(["checkout", "--detach", detachedRevision])
+
+    let page = try await LocalWorkspace(gitExecutable: fixture.git).repositoryHistory(
+        in: fixture.folder.url, revision: nil, offset: 0, limit: 30)
+    #expect(page.revision == detachedRevision)
+    #expect(page.commits.map(\.subject) == ["detached baseline"])
+    #expect(!page.hasMore)
+}
+
+@Test func repositoryHistoryWorksInLinkedWorktree() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("history.swift")
+    try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "history.swift"])
+    try fixture.run(["commit", "-m", "main baseline"])
+    let worktreeParent = try TemporaryFolder()
+    let linked = worktreeParent.url.appendingPathComponent("linked")
+    try fixture.run(["worktree", "add", "-b", "history", linked.path])
+    let linkedFile = linked.appendingPathComponent("history.swift")
+    try "let value = 2\n".write(to: linkedFile, atomically: true, encoding: .utf8)
+    try fixture.run(["-C", linked.path, "add", "history.swift"])
+    try fixture.run(["-C", linked.path, "commit", "-m", "linked worktree commit"])
+
+    let page = try await LocalWorkspace(gitExecutable: fixture.git).repositoryHistory(
+        in: linked, revision: nil, offset: 0, limit: 30)
+    #expect(page.commits.map(\.subject) == ["linked worktree commit", "main baseline"])
+    #expect(!page.hasMore)
+}
+
+@Test func repositoryHistoryIsEmptyForAnUnbornRepository() async throws {
+    let fixture = try GitFixture()
+    let page = try await LocalWorkspace(gitExecutable: fixture.git).repositoryHistory(
+        in: fixture.folder.url, revision: nil, offset: 0, limit: 30)
+    #expect(page.revision?.hasPrefix("unborn:refs/heads/") == true)
+    #expect(page.commits.isEmpty)
+    #expect(page.nextOffset == 0 && !page.hasMore)
+}
+
+@Test func repositoryHistoryReportsMissingHeadObject() async throws {
+    let fixture = try GitFixture()
+    try "baseline\n".write(
+        to: fixture.folder.url.appendingPathComponent("history.swift"), atomically: true, encoding: .utf8)
+    try fixture.run(["add", "."])
+    try fixture.run(["commit", "-m", "history baseline"])
+    let object = String(
+        decoding: try fixture.runCapture(["rev-parse", "HEAD"]), as: UTF8.self
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+    let looseObject = fixture.folder.url.appendingPathComponent(".git/objects")
+        .appendingPathComponent(String(object.prefix(2)))
+        .appendingPathComponent(String(object.dropFirst(2)))
+    try FileManager.default.removeItem(at: looseObject)
+
+    await #expect(throws: WorkspaceFailure.self) {
+        try await LocalWorkspace(gitExecutable: fixture.git).repositoryHistory(
+            in: fixture.folder.url, revision: nil, offset: 0, limit: 30)
+    }
+}
+
+@Test func repositoryHistoryNeverReturnsMoreThanItsGlobalBudget() async throws {
+    let fixture = try GitFixture()
+    let commitCount = 205
+    var stream = "reset refs/heads/main\n"
+    for index in 1...commitCount {
+        let subject = "commit \(index)"
+        let content = "let value = \(index)\n"
+        stream += "commit refs/heads/main\nmark :\(index)\n"
+        stream += "committer Loffo Test <test@example.invalid> \(1_700_000_000 + index) +0000\n"
+        stream += "data \(subject.utf8.count)\n\(subject)\n"
+        if index > 1 { stream += "from :\(index - 1)\n" }
+        stream += "M 100644 inline history.swift\ndata \(content.utf8.count)\n\(content)\n"
+    }
+    try fixture.runInput(["fast-import", "--quiet"], data: Data(stream.utf8))
+    try fixture.run(["symbolic-ref", "HEAD", "refs/heads/main"])
+
+    let workspace = LocalWorkspace(gitExecutable: fixture.git)
+    var revision: String?
+    var offset = 0
+    var total = 0
+    var lastPage: RepositoryHistoryPage?
+    while offset < 200 {
+        let page = try await workspace.repositoryHistory(
+            in: fixture.folder.url, revision: revision, offset: offset, limit: 30)
+        revision = page.revision
+        total += page.commits.count
+        offset = page.nextOffset
+        lastPage = page
+    }
+    #expect(total == 200)
+    #expect(offset == 200)
+    #expect(lastPage?.commits.count == 20)
+    #expect(lastPage?.hasMore == false)
+    let beyondBudget = try await workspace.repositoryHistory(
+        in: fixture.folder.url, revision: revision, offset: 200, limit: 30)
+    #expect(beyondBudget.commits.isEmpty)
+    #expect(beyondBudget.nextOffset == 200 && !beyondBudget.hasMore)
+}
+
+@Test @MainActor func changesPanelLoadsRecentRepositoryHistory() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("sample.swift")
+    try "let value = 1\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "."])
+    try fixture.run(["commit", "-m", "first local commit"])
+    try "let value = 2\n".write(to: file, atomically: true, encoding: .utf8)
+    try fixture.run(["add", "."])
+    try fixture.run(["commit", "-m", "second local commit"])
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: fixture.git), syntax: TreeSyntax(),
+        diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(fixture.folder.url)
+    model.setDiff(true)
+    for _ in 0..<500 where model.repositoryHistory.first?.subject != "second local commit" {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.repositoryHistory.map(\.subject) == ["second local commit", "first local commit"])
+    #expect(!model.repositoryHistoryHasMore)
+}
+
+@Test @MainActor func changesPanelLoadsNextRepositoryHistoryPage() async throws {
+    let fixture = try GitFixture()
+    let file = fixture.folder.url.appendingPathComponent("sample.swift")
+    for index in 0..<42 {
+        try "let value = \(index)\n".write(to: file, atomically: true, encoding: .utf8)
+        try fixture.run(["add", "sample.swift"])
+        try fixture.run(["commit", "-m", "commit \(index)"])
+    }
+
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: fixture.git), syntax: TreeSyntax(),
+        diff: LineDiff(), observer: ActiveTestObserver())
+    defer { model.close() }
+    await model.open(fixture.folder.url)
+    model.setDiff(true)
+    for _ in 0..<1_000 where model.repositoryHistory.count != 30 && model.repositoryHistoryError == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.repositoryHistory.count == 30)
+    #expect(model.repositoryHistory.first?.subject == "commit 41")
+    #expect(model.repositoryHistoryHasMore)
+
+    model.loadMoreRepositoryHistory()
+    for _ in 0..<1_000 where model.repositoryHistory.count != 42 && model.repositoryHistoryError == nil {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.repositoryHistory.count == 42)
+    #expect(model.repositoryHistory.last?.subject == "commit 0")
+    #expect(!model.repositoryHistoryHasMore)
+    #expect(model.repositoryHistoryError == nil)
 }
 
 @Test @MainActor func newTextFilesCompareAgainstAnEmptyHeadRevision() async throws {
@@ -3676,6 +4666,7 @@ private actor HeldFullListingWorkspace: WorkspaceReading {
     let recorder = WorkspaceEventRecorder()
     let lease = await observer.observeWorkspaceChanges(root) { recorder.changes.append($0) }
     defer { lease.cancel() }
+    for _ in 0..<500 where !lease.isActive { try await Task.sleep(for: .milliseconds(10)) }
     #expect(lease.isActive)
     let handle = try FileHandle(forWritingTo: file)
     try handle.seek(toOffset: 12)
@@ -3688,4 +4679,68 @@ private actor HeldFullListingWorkspace: WorkspaceReading {
             #expect(paths.contains(file.standardizedFileURL))
         }
     }
+}
+
+@Test @MainActor func realFileEventRefreshesSelectedGitDiffToLatestContents() async throws {
+    let fixture = try GitFixture()
+    let root = fixture.folder.url.resolvingSymlinksInPath()
+    let file = root.appendingPathComponent("sample.swift")
+    try "let value = 1\n".write(to: file, atomically: false, encoding: .utf8)
+    try fixture.run(["add", "sample.swift"])
+    try fixture.run(["commit", "-m", "base"])
+
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: fixture.git), syntax: TreeSyntax(), diff: LineDiff(),
+        observer: FileWatchHub())
+    defer { model.close() }
+    await model.open(root)
+    model.setDiff(true)
+    for _ in 0..<500 where model.isRefreshingFiles { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(model.changesIndicator == .clean)
+    model.select("sample.swift")
+    for _ in 0..<500 where model.presentation?.diff == nil || model.isUpdating {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.presentation?.text.contains("let value = 1") == true)
+
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.truncate(atOffset: 0)
+    try handle.write(contentsOf: Data("let value = 2\n".utf8))
+    try handle.close()
+
+    for _ in 0..<500
+    where model.isRefreshingFiles || model.isUpdating
+        || model.changesIndicator != .count(1)
+        || model.presentation?.text.contains("let value = 2") != true
+    {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(model.presentation?.text.contains("let value = 2") == true)
+    #expect(model.changesIndicator == .count(1))
+    #expect(!model.isRefreshingFiles && !model.isUpdating)
+}
+
+@Test @MainActor func selectingFileRejectsFolderReplacementAfterWorkspaceOpen() async throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    let moved = folder.url.appendingPathComponent("selected-project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "selected folder\n".write(
+        to: root.appendingPathComponent("sample.swift"), atomically: true, encoding: .utf8)
+    let model = WorkspaceModel(
+        workspace: LocalWorkspace(gitExecutable: nil), syntax: TreeSyntax(), diff: LineDiff(),
+        observer: FileWatchHub())
+    defer { model.close() }
+    await model.open(root)
+    #expect(model.files.contains(where: { $0.path == "sample.swift" }))
+
+    try FileManager.default.moveItem(at: root, to: moved)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "replacement folder\n".write(
+        to: root.appendingPathComponent("sample.swift"), atomically: true, encoding: .utf8)
+    model.select("sample.swift")
+    for _ in 0..<500 where model.error == nil { try await Task.sleep(for: .milliseconds(10)) }
+
+    #expect(model.error?.contains("folder changed after it was selected") == true)
+    #expect(model.presentation == nil)
 }

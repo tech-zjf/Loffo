@@ -17,6 +17,46 @@ private final class PopoverWindow: NSPanel {
     override var canBecomeKey: Bool { true }
 }
 
+struct PopoverPlacement {
+    let edge: Edge
+    let frame: NSRect
+
+    static func resolve(anchor: NSRect, size: NSSize, visibleFrame: NSRect, preferredEdge: Edge)
+        -> PopoverPlacement
+    {
+        let width = min(max(1, size.width), max(1, visibleFrame.width))
+        let height = min(max(1, size.height), max(1, visibleFrame.height))
+        var edge = preferredEdge
+        switch edge {
+        case .top where anchor.minY - height < visibleFrame.minY:
+            if anchor.maxY + height <= visibleFrame.maxY { edge = .bottom }
+        case .bottom where anchor.maxY + height > visibleFrame.maxY:
+            if anchor.minY - height >= visibleFrame.minY { edge = .top }
+        case .leading where anchor.maxX + width > visibleFrame.maxX:
+            if anchor.minX - width >= visibleFrame.minX { edge = .trailing }
+        case .trailing where anchor.minX - width < visibleFrame.minX:
+            if anchor.maxX + width <= visibleFrame.maxX { edge = .leading }
+        default:
+            break
+        }
+
+        let origin: NSPoint
+        switch edge {
+        case .top:
+            origin = NSPoint(x: anchor.midX - width / 2, y: anchor.minY - height)
+        case .bottom:
+            origin = NSPoint(x: anchor.midX - width / 2, y: anchor.maxY)
+        case .leading:
+            origin = NSPoint(x: anchor.maxX, y: anchor.midY - height / 2)
+        case .trailing:
+            origin = NSPoint(x: anchor.minX - width, y: anchor.midY - height / 2)
+        }
+        let x = min(max(visibleFrame.minX, origin.x), visibleFrame.maxX - width)
+        let y = min(max(visibleFrame.minY, origin.y), visibleFrame.maxY - height)
+        return PopoverPlacement(edge: edge, frame: NSRect(x: x, y: y, width: width, height: height))
+    }
+}
+
 private struct PopoverAnchor<Panel: View>: NSViewRepresentable {
     @Binding var isPresented: Bool
     let arrowEdge: Edge
@@ -71,7 +111,11 @@ private struct PopoverAnchor<Panel: View>: NSViewRepresentable {
             if panel == nil || parent !== window {
                 close()
                 parent = window
-                let host = NSHostingView(rootView: LoffoPopoverSurface(edge: .top, content: content))
+                let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
+                let maximumSize = Self.maximumPopoverSize(in: visibleFrame)
+                let host = NSHostingView(
+                    rootView: LoffoPopoverSurface(
+                        edge: .top, maximumSize: maximumSize, content: content))
                 let panel = PopoverWindow(
                     contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
                     defer: false)
@@ -154,31 +198,26 @@ private struct PopoverAnchor<Panel: View>: NSViewRepresentable {
             case .leading: edge = .trailing
             case .trailing: edge = .leading
             }
-            host.rootView = LoffoPopoverSurface(edge: edge, content: content)
+            let visibleSize = screen.visibleFrame.size
+            let maximumSize = Self.maximumPopoverSize(in: screen.visibleFrame)
+            host.rootView = LoffoPopoverSurface(
+                edge: edge, maximumSize: maximumSize, content: content)
             var size = host.fittingSize
-            switch edge {
-            case .top where anchorRect.minY - size.height < bounds.minY: edge = .bottom
-            case .bottom where anchorRect.maxY + size.height > bounds.maxY: edge = .top
-            case .leading where anchorRect.maxX + size.width > bounds.maxX: edge = .trailing
-            case .trailing where anchorRect.minX - size.width < bounds.minX: edge = .leading
-            default: break
+            size.width = min(size.width, min(visibleSize.width, maximumSize.width + 5))
+            size.height = min(size.height, min(visibleSize.height, maximumSize.height + 5))
+            let placement = PopoverPlacement.resolve(
+                anchor: anchorRect, size: size, visibleFrame: bounds, preferredEdge: edge)
+            if placement.edge != edge {
+                host.rootView = LoffoPopoverSurface(
+                    edge: placement.edge, maximumSize: maximumSize, content: content)
             }
-            host.rootView = LoffoPopoverSurface(edge: edge, content: content)
-            size = host.fittingSize
-            let origin: NSPoint
-            switch edge {
-            case .top:
-                origin = NSPoint(x: anchorRect.midX - size.width / 2, y: anchorRect.minY - size.height)
-            case .bottom:
-                origin = NSPoint(x: anchorRect.midX - size.width / 2, y: anchorRect.maxY)
-            case .leading:
-                origin = NSPoint(x: anchorRect.maxX, y: anchorRect.midY - size.height / 2)
-            case .trailing:
-                origin = NSPoint(x: anchorRect.minX - size.width, y: anchorRect.midY - size.height / 2)
-            }
-            let x = min(max(bounds.minX, origin.x), max(bounds.minX, bounds.maxX - size.width))
-            let y = min(max(bounds.minY, origin.y), max(bounds.minY, bounds.maxY - size.height))
-            panel.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
+            panel.setFrame(placement.frame, display: true)
+        }
+
+        private static func maximumPopoverSize(in visibleFrame: NSRect) -> CGSize {
+            CGSize(
+                width: max(1, min(420, visibleFrame.width - 24)),
+                height: max(1, min(560, visibleFrame.height - 24)))
         }
 
         func close() {

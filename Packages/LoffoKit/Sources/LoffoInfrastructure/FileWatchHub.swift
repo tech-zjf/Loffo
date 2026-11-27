@@ -90,7 +90,7 @@ import LoffoDomain
         rebind(url)
     }
     private func retryRepository(_ url: URL) async {
-        guard let previous = repositories[url], !previous.isActive else { return }
+        guard let previous = repositories[url], !previous.isActive, !previous.isStarting else { return }
         previous.stop()
         await previous.startIfNeeded()
     }

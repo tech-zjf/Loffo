@@ -48,6 +48,47 @@ import os
     }
 }
 
+@Test func sideBySideProjectionAlignsChangesAndPreservesBothSides() {
+    let result = DiffResult(
+        lines: [
+            DiffLine(text: "before\n", kind: .context, oldNumber: 1, newNumber: 1),
+            DiffLine(text: "old A\n", kind: .removed, oldNumber: 2, newNumber: nil),
+            DiffLine(text: "old B\n", kind: .removed, oldNumber: 3, newNumber: nil),
+            DiffLine(text: "new A\n", kind: .added, oldNumber: nil, newNumber: 2),
+            DiffLine(text: "middle\n", kind: .context, oldNumber: 4, newNumber: 3),
+            DiffLine(text: "终わり", kind: .added, oldNumber: nil, newNumber: 4),
+        ],
+        isCoarse: false)
+
+    let projection = SideBySideProjection(result: result)
+    #expect(projection.rows.count == 5)
+    #expect(projection.rows[0].before?.text == "before\n")
+    #expect(projection.rows[0].after?.text == "before\n")
+    #expect(projection.rows[1].before?.text == "old A\n")
+    #expect(projection.rows[1].after?.text == "new A\n")
+    #expect(projection.rows[2].before?.text == "old B\n")
+    #expect(projection.rows[2].after == nil)
+    #expect(projection.rows[3].before?.text == "middle\n")
+    #expect(projection.rows[3].after?.text == "middle\n")
+    #expect(projection.rows[4].before == nil)
+    #expect(projection.rows[4].after?.text == "终わり")
+    #expect(projection.hunkStarts.count == UnifiedProjection(result: result).hunkStarts.count)
+    #expect(projection.before.rows.contains { $0.isPlaceholder })
+    #expect(projection.after.rows.contains { $0.isPlaceholder })
+}
+
+@Test func sideBySideProjectionGroupsNearbyChangesLikeUnifiedProjection() {
+    let lines = (0..<30).map { index in
+        DiffLine(
+            text: "line \(index)\n", kind: index == 4 || index == 8 || index == 24 ? .added : .context,
+            oldNumber: index + 1, newNumber: index + 1)
+    }
+    let result = DiffResult(lines: lines, isCoarse: false)
+    #expect(
+        SideBySideProjection(result: result).hunkStarts.count
+            == UnifiedProjection(result: result).hunkStarts.count)
+}
+
 @Test func myersRepeatedLinesMatchReferenceAndReconstructBytes() async throws {
     var seed: UInt64 = 0x1289_8342
     func random(_ upperBound: Int) -> Int {
@@ -801,6 +842,86 @@ final class TemporaryFolder: Sendable {
         }
     }
     #expect(try StableFileReader.read(in: root, path: "file.txt", limit: 1_024) == Data("new\n".utf8))
+}
+
+@Test func workspaceReadRejectsRootReplacementSinceFolderSelection() throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    let moved = folder.url.appendingPathComponent("selected-project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "selected\n".write(
+        to: root.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    let identity = try StableFileReader.rootIdentity(at: root)
+    try FileManager.default.moveItem(at: root, to: moved)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "replacement\n".write(
+        to: root.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+
+    #expect(throws: WorkspaceFailure.self) {
+        try StableFileReader.read(
+            in: root, path: "file.txt", limit: 1_024, expectedRootIdentity: identity)
+    }
+}
+
+@Test func rootIdentityPermissionFailureDoesNotMasqueradeAsRootReplacement() throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let identity = try StableFileReader.rootIdentity(at: root)
+    defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path) }
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: root.path)
+
+    do {
+        try StableFileReader.validateRootIdentity(at: root, expected: identity)
+        Issue.record("An unreadable root must prevent identity validation.")
+    } catch let failure as WorkspaceFailure {
+        guard case .unavailable = failure else {
+            Issue.record("A temporary permission failure must not be reported as a replaced root.")
+            return
+        }
+    }
+}
+
+@Test func workspaceReadReportsMissingCapturedRootAsTemporarilyUnavailable() throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let identity = try StableFileReader.rootIdentity(at: root)
+    try FileManager.default.removeItem(at: root)
+
+    do {
+        _ = try StableFileReader.read(
+            in: root, path: "file.txt", limit: 1_024, expectedRootIdentity: identity)
+        Issue.record("A missing captured root must be rejected while recovery remains possible.")
+    } catch let failure as WorkspaceFailure {
+        guard case .workspaceRootTemporarilyUnavailable = failure else {
+            Issue.record("A missing captured root must remain distinct from an identity replacement.")
+            return
+        }
+    }
+}
+
+@Test func documentCacheDoesNotBypassWorkspaceRootIdentityValidation() async throws {
+    let folder = try TemporaryFolder()
+    let root = folder.url.appendingPathComponent("project", isDirectory: true)
+    let moved = folder.url.appendingPathComponent("selected-project", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "selected\n".write(
+        to: root.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    let identity = try StableFileReader.rootIdentity(at: root)
+    let store = DocumentStore(io: BoundedIO())
+    let snapshot = try await store.read(
+        in: root, path: "file.txt", allowMissing: false, expectedRootIdentity: identity)
+    #expect(snapshot.text == "selected\n")
+
+    try FileManager.default.moveItem(at: root, to: moved)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try "replacement\n".write(
+        to: root.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+    await #expect(throws: WorkspaceFailure.self) {
+        try await store.read(
+            in: root, path: "file.txt", allowMissing: false, expectedRootIdentity: identity)
+    }
 }
 
 @Test func workspaceReadRejectsRootAncestorRedirectDuringRead() throws {

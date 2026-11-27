@@ -19,6 +19,17 @@ enum IsolatedGitProcess {
             try? error.fileHandleForReading.close()
             try? error.fileHandleForWriting.close()
         }
+        for handle in [
+            output.fileHandleForReading, output.fileHandleForWriting,
+            error.fileHandleForReading, error.fileHandleForWriting,
+        ] {
+            let descriptorFlags = fcntl(handle.fileDescriptor, F_GETFD)
+            guard descriptorFlags >= 0,
+                fcntl(handle.fileDescriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0
+            else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+        }
         for handle in [output.fileHandleForReading, error.fileHandleForReading] {
             let flags = fcntl(handle.fileDescriptor, F_GETFL)
             guard flags >= 0, fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
@@ -127,10 +138,50 @@ enum IsolatedGitProcess {
             if result < 0 && errno == EINTR { continue }
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
         }
+        var pipeCleanupExpired = false
+        if waitError == nil, !exceeded {
+            let cleanupStart = DispatchTime.now().uptimeNanoseconds
+            let (cleanupSum, cleanupOverflow) = cleanupStart.addingReportingOverflow(1_000_000_000)
+            let cleanupDeadline = cleanupOverflow ? UInt64.max : cleanupSum
+            while outputOpen || errorOpen {
+                do {
+                    try drain(
+                        output.fileHandleForReading.fileDescriptor, into: &stdout, open: &outputOpen,
+                        limit: limit)
+                    try drain(
+                        error.fileHandleForReading.fileDescriptor, into: &stderr, open: &errorOpen,
+                        limit: 64 * 1_024)
+                } catch let error as NSError {
+                    waitError = Int32(error.code)
+                    break
+                }
+                if !outputOpen && !errorOpen { break }
+                if stdout.count > limit || stderr.count > 64 * 1_024 { break }
+                if DispatchTime.now().uptimeNanoseconds >= cleanupDeadline {
+                    pipeCleanupExpired = true
+                    break
+                }
+                var descriptors = [
+                    pollfd(
+                        fd: outputOpen ? output.fileHandleForReading.fileDescriptor : -1,
+                        events: Int16(POLLIN), revents: 0),
+                    pollfd(
+                        fd: errorOpen ? error.fileHandleForReading.fileDescriptor : -1,
+                        events: Int16(POLLIN), revents: 0),
+                ]
+                if poll(&descriptors, nfds_t(descriptors.count), 25) < 0 && errno != EINTR {
+                    waitError = errno
+                    break
+                }
+            }
+        }
         if cancelled || isCancelled() { throw CancellationError() }
         if let waitError { throw NSError(domain: NSPOSIXErrorDomain, code: Int(waitError)) }
         if exceeded {
             throw WorkspaceFailure.unavailable("Git exceeded the prototype's time or output budget.")
+        }
+        if pipeCleanupExpired {
+            throw WorkspaceFailure.unavailable("Git left output pipes open after process-group cleanup.")
         }
         // Bytes written between the last drain and leader exit still belong to this command.
         try drain(output.fileHandleForReading.fileDescriptor, into: &stdout, open: &outputOpen, limit: limit)

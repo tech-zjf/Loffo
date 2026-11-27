@@ -10,6 +10,12 @@ import LoffoDomain
     var gutterWidth: CGFloat {
         didSet { needsLayout = true }
     }
+    var diffSide: CodeDiffSide? {
+        didSet {
+            gutter.diffSide = diffSide
+            needsDisplay = true
+        }
+    }
     override var isFlipped: Bool { true }
 
     init(scroll: NSScrollView, gutterWidth: CGFloat) {
@@ -43,10 +49,9 @@ import LoffoDomain
         super.layout()
         LoffoScrollAppearance.apply(to: scroll)
         let width = min(gutterWidth, bounds.width)
-        let trailing = gutter.diffLines == nil ? 0 : LoffoMetrics.diffTrailingInset
         gutter.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
         scroll.frame = NSRect(
-            x: width, y: 0, width: max(0, bounds.width - width - trailing), height: bounds.height)
+            x: width, y: 0, width: max(0, bounds.width - width), height: bounds.height)
         updateDocumentHeight()
         needsDisplay = true
     }
@@ -65,6 +70,7 @@ import LoffoDomain
     override var isFlipped: Bool { true }
     var diffLines: [DiffLine]?
     var displayRows: [PresentedLine]?
+    var diffSide: CodeDiffSide?
     var lineCount = 0
     override func draw(_ rect: NSRect) {
         guard let scroll = scrollView else { return }
@@ -85,12 +91,14 @@ import LoffoDomain
                 item = diffLines.flatMap { line < $0.count ? $0[line] : nil }
             }
             if displayRows?[line].heading != nil {
+                guard diffSide == nil else { continue }
                 if line == 0 {
                     ("Old" as NSString).draw(at: NSPoint(x: 20, y: 8 - top), withAttributes: attributes)
                     ("New" as NSString).draw(at: NSPoint(x: 58, y: 8 - top), withAttributes: attributes)
                 }
                 continue
             }
+            if displayRows?[line].isPlaceholder == true { continue }
             if let item {
                 let color =
                     item.kind == .added
@@ -99,11 +107,26 @@ import LoffoDomain
                 var style = attributes
                 style[.foregroundColor] = NSColor(color)
                 let y = 9 + CGFloat(line) * LoffoMetrics.line - top
-                for (value, right) in [
-                    (item.oldNumber.map(String.init) ?? "", 38.0),
-                    (item.newNumber.map(String.init) ?? "", 76.0),
-                    (item.kind == .added ? "+" : item.kind == .removed ? "−" : "", 112.0),
-                ] {
+                let labels: [(String, Double)]
+                switch diffSide {
+                case .before:
+                    labels = [
+                        (item.oldNumber.map(String.init) ?? "", 42.0),
+                        (item.kind == .removed ? "−" : "", 64.0),
+                    ]
+                case .after:
+                    labels = [
+                        (item.newNumber.map(String.init) ?? "", 42.0),
+                        (item.kind == .added ? "+" : "", 64.0),
+                    ]
+                case nil:
+                    labels = [
+                        (item.oldNumber.map(String.init) ?? "", 38.0),
+                        (item.newNumber.map(String.init) ?? "", 76.0),
+                        (item.kind == .added ? "+" : item.kind == .removed ? "−" : "", 112.0),
+                    ]
+                }
+                for (value, right) in labels {
                     let label = value as NSString
                     label.draw(
                         at: NSPoint(x: right - label.size(withAttributes: style).width, y: y),

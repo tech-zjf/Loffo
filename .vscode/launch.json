@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Loffo}/Apps/Loffo",
+      "name": "Debug Loffo (Apps/Loffo)",
+      "target": "Loffo",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Loffo (Apps/Loffo)"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Loffo}/Apps/Loffo",
+      "name": "Release Loffo (Apps/Loffo)",
+      "target": "Loffo",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Loffo (Apps/Loffo)"
+    }
+  ]
+}

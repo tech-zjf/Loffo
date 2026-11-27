@@ -4,19 +4,64 @@ import LoffoDomain
 import OSLog
 import SwiftUI
 
+public enum CodeDiffSide: Sendable, Equatable {
+    case before
+    case after
+}
+
+/// Window-owned vertical viewport link; each editor keeps its independent horizontal offset.
+@MainActor public final class LinkedEditorViewport {
+    private weak var before: NSScrollView?
+    private weak var after: NSScrollView?
+    private var isSynchronizing = false
+
+    public init() {}
+
+    func attach(_ scroll: NSScrollView, side: CodeDiffSide) {
+        switch side {
+        case .before: before = scroll
+        case .after: after = scroll
+        }
+        synchronize(from: scroll, side: side)
+    }
+
+    func synchronize(from source: NSScrollView, side: CodeDiffSide) {
+        guard !isSynchronizing else { return }
+        let target: NSScrollView?
+        switch side {
+        case .before: target = after
+        case .after: target = before
+        }
+        guard let target, target !== source else { return }
+        isSynchronizing = true
+        defer { isSynchronizing = false }
+        var origin = target.contentView.bounds.origin
+        origin.y = source.contentView.bounds.minY
+        let clip = target.contentView
+        origin = clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin
+        clip.scroll(to: origin)
+        target.reflectScrolledClipView(clip)
+    }
+}
+
 public struct CodeEditor: NSViewRepresentable {
     public let presentation: CodePresentation
     public let navigation: CodeNavigation?
     public let accessibilityName: String
     public let syntaxTheme: EditorSyntaxTheme
+    public let diffSide: CodeDiffSide?
+    public let viewportLink: LinkedEditorViewport?
     public init(
         presentation: CodePresentation, navigation: CodeNavigation? = nil, accessibilityName: String = "Code",
-        syntaxTheme: EditorSyntaxTheme = .standard
+        syntaxTheme: EditorSyntaxTheme = .standard, diffSide: CodeDiffSide? = nil,
+        viewportLink: LinkedEditorViewport? = nil
     ) {
         self.presentation = presentation
         self.navigation = navigation
         self.accessibilityName = accessibilityName
         self.syntaxTheme = syntaxTheme
+        self.diffSide = diffSide
+        self.viewportLink = viewportLink
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator() }
@@ -47,8 +92,9 @@ public struct CodeEditor: NSViewRepresentable {
         text.textContainer?.containerSize = text.maxSize
         text.textContainer?.widthTracksTextView = false
         scroll.documentView = text
-        let surface = EditorSurface(scroll: scroll, gutterWidth: presentation.diff == nil ? 48 : 118)
-        context.coordinator.connect(text, surface: surface)
+        let surface = EditorSurface(scroll: scroll, gutterWidth: Self.gutterWidth(diffSide))
+        surface.diffSide = diffSide
+        context.coordinator.connect(text, surface: surface, diffSide: diffSide, viewportLink: viewportLink)
         return surface
     }
     public static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
@@ -56,8 +102,13 @@ public struct CodeEditor: NSViewRepresentable {
     }
     public func updateNSView(_ view: NSView, context: Context) {
         context.coordinator.name(accessibilityName)
+        context.coordinator.link(diffSide: diffSide, viewportLink: viewportLink)
         context.coordinator.submit(presentation, theme: syntaxTheme)
         context.coordinator.navigate(navigation)
+    }
+
+    private static func gutterWidth(_ side: CodeDiffSide?) -> CGFloat {
+        side == nil ? 118 : 70
     }
 
     @MainActor public final class Coordinator {
@@ -66,6 +117,8 @@ public struct CodeEditor: NSViewRepresentable {
         private weak var ruler: LineGutter?
         private weak var surface: EditorSurface?
         private var current: CodePresentation?
+        private var diffSide: CodeDiffSide?
+        private var viewportLink: LinkedEditorViewport?
         private var pending: CodePresentation?
         private var syntaxIndex = SyntaxSpanIndex([])
         private var lineStarts: [Int] = [0]
@@ -81,10 +134,16 @@ public struct CodeEditor: NSViewRepresentable {
         private var observer: NSObjectProtocol?
         private var resizeObserver: NSObjectProtocol?
 
-        func connect(_ text: TrackingTextView, surface: EditorSurface) {
+        func connect(
+            _ text: TrackingTextView, surface: EditorSurface, diffSide: CodeDiffSide? = nil,
+            viewportLink: LinkedEditorViewport? = nil
+        ) {
             let scroll = surface.scroll
             let ruler = surface.gutter
             self.surface = surface
+            self.diffSide = diffSide
+            self.viewportLink = viewportLink
+            if let diffSide, let viewportLink { viewportLink.attach(scroll, side: diffSide) }
             textView = text
             scrollView = scroll
             self.ruler = ruler
@@ -96,10 +155,14 @@ public struct CodeEditor: NSViewRepresentable {
                 object: scroll.contentView, queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.relocateViewport()
-                    self?.decorate()
-                    self?.ruler?.needsDisplay = true
-                    self?.surface?.needsDisplay = true
+                    guard let self else { return }
+                    if let side = self.diffSide {
+                        self.viewportLink?.synchronize(from: scroll, side: side)
+                    }
+                    self.relocateViewport()
+                    self.decorate()
+                    self.ruler?.needsDisplay = true
+                    self.surface?.needsDisplay = true
                 }
             }
             resizeObserver = NotificationCenter.default.addObserver(
@@ -107,6 +170,15 @@ public struct CodeEditor: NSViewRepresentable {
                 object: scroll.contentView, queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.decorate() }
+            }
+        }
+        fileprivate func link(diffSide: CodeDiffSide?, viewportLink: LinkedEditorViewport?) {
+            guard self.diffSide != diffSide || self.viewportLink !== viewportLink else { return }
+            self.diffSide = diffSide
+            self.viewportLink = viewportLink
+            surface?.diffSide = diffSide
+            if let diffSide, let viewportLink, let scrollView {
+                viewportLink.attach(scrollView, side: diffSide)
             }
         }
         fileprivate func name(_ name: String) { textView?.setAccessibilityLabel(name) }
@@ -208,7 +280,8 @@ public struct CodeEditor: NSViewRepresentable {
             }
             text.displayRows = next.rows
             let modeChanged = (current?.diff == nil) != (next.diff == nil)
-            surface?.gutterWidth = next.diff == nil ? 48 : 118
+            surface?.gutterWidth = diffSide == nil ? (next.diff == nil ? 48 : 118) : 70
+            surface?.diffSide = diffSide
             if modeChanged { scroll.x = 0 }
             storage.endEditing()
             current = next

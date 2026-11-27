@@ -9,9 +9,12 @@ import LoffoDomain
 
     func run(
         workspace: any WorkspaceReading, windowAdmission: WorkAdmission, appAdmission: WorkAdmission,
-        root: URL, path: String,
-        allowMissing: Bool
+        root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity? = nil
     ) async throws -> TextSnapshot {
+        // The caller can invoke this on a temporary coordinator. Keep the owner alive while the
+        // provider task is suspended; its completion callback intentionally captures `self` weakly.
+        defer { withExtendedLifetime(self) {} }
         try Task.checkCancellation()
         let snapshot: TextSnapshot = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
@@ -31,7 +34,8 @@ import LoffoDomain
                             do {
                                 try Task.checkCancellation()
                                 value = try await workspace.read(
-                                    in: root, path: path, allowMissing: allowMissing)
+                                    in: root, path: path, allowMissing: allowMissing,
+                                    expectedRootIdentity: expectedRootIdentity)
                                 await appAdmission.release(bytes: 1)
                             } catch {
                                 await appAdmission.release(bytes: 1)
@@ -56,7 +60,7 @@ import LoffoDomain
         return snapshot
     }
 
-    private func cancel() {
+    func cancel() {
         task?.cancel()
         task = nil
         let pending = continuation

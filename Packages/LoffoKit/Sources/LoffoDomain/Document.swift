@@ -76,8 +76,21 @@ public struct FileListing: Sendable {
     }
 }
 
+/// Identifies the opened workspace directory for a single running application session.
+/// It is intentionally process-local and must not be persisted as a document identity.
+public struct WorkspaceRootIdentity: Sendable, Hashable {
+    public let device: UInt64
+    public let inode: UInt64
+
+    public init(device: UInt64, inode: UInt64) {
+        self.device = device
+        self.inode = inode
+    }
+}
+
 public enum WorkspaceFailure: Error, Sendable, LocalizedError {
-    case tooLarge, binary, invalidEncoding
+    case tooLarge, binary, invalidEncoding, workspaceRootChanged, workspaceRootChangedWhileOpening
+    case workspaceRootTemporarilyUnavailable
     case unavailable(String)
     case unsupportedComparison(String)
     case unsupportedAttribute(String)
@@ -88,6 +101,12 @@ public enum WorkspaceFailure: Error, Sendable, LocalizedError {
             DomainStrings.text("This is a binary file. Image and binary previews are not available yet.")
         case .invalidEncoding:
             DomainStrings.text("This file is not valid UTF-8. Its contents have not been modified.")
+        case .workspaceRootChanged:
+            DomainStrings.text("The opened folder changed after it was selected.")
+        case .workspaceRootChangedWhileOpening:
+            DomainStrings.text("The opened folder changed while it was being opened.")
+        case .workspaceRootTemporarilyUnavailable:
+            DomainStrings.text("The opened folder is no longer available.")
         case .unavailable(let reason), .unsupportedComparison(let reason): DomainStrings.text(reason)
         case .unsupportedAttribute(let attribute):
             String(
@@ -139,19 +158,35 @@ extension SyntaxProviding {
 }
 
 public protocol WorkspaceReading: Sendable {
+    func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity?
     func invalidateRepositoryScans(in root: URL)
     func changes(in root: URL) async throws -> FileListing
     func repositoryObservationRoots(in root: URL) async throws -> [URL]
     func repositoryObservationFiles(in root: URL) async throws -> [URL]
     func revalidateRepositoryObservationFiles(in root: URL) async throws -> [URL]
     func history(in root: URL, path: String) async throws -> [FileCommit]
+    func repositoryHistory(
+        in root: URL, revision: String?, offset: Int, limit: Int
+    ) async throws -> RepositoryHistoryPage
     func branch(in root: URL) async throws -> String
     func validateComparison(in root: URL, path: String) async throws
     func files(in root: URL) async throws -> FileListing
     func read(_ url: URL) async throws -> TextSnapshot
     func readDeletedOrCurrent(_ url: URL) async throws -> TextSnapshot
     func read(in root: URL, path: String, allowMissing: Bool) async throws -> TextSnapshot
+    func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot
     func baseline(in root: URL, path: String, workingText: String) async throws -> ComparisonInput
+}
+
+extension WorkspaceReading {
+    public func repositoryHistory(
+        in root: URL, revision: String?, offset: Int, limit: Int
+    ) async throws -> RepositoryHistoryPage {
+        RepositoryHistoryPage(revision: revision, commits: [], nextOffset: offset, hasMore: false)
+    }
 }
 
 public struct ComparisonInput: Sendable {
@@ -202,6 +237,17 @@ extension FileObserving {
 }
 
 extension WorkspaceReading {
+    public func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? { nil }
+    public func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot {
+        guard expectedRootIdentity == nil else {
+            throw WorkspaceFailure.unavailable(
+                DomainStrings.text("This workspace provider cannot verify folder identity."))
+        }
+        return try await read(in: root, path: path, allowMissing: allowMissing)
+    }
     public func invalidateRepositoryScans(in root: URL) {}
     public func repositoryObservationRoots(in root: URL) async throws -> [URL] { [] }
     public func repositoryObservationFiles(in root: URL) async throws -> [URL] { [] }

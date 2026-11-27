@@ -4,9 +4,14 @@ import SwiftUI
 public struct LoffoPopoverSurface<Content: View>: View {
     private let content: Content
     let edge: Edge
+    private let maximumSize: CGSize
 
-    public init(edge: Edge = .top, @ViewBuilder content: () -> Content) {
+    public init(
+        edge: Edge = .top, maximumSize: CGSize = CGSize(width: 420, height: 560),
+        @ViewBuilder content: () -> Content
+    ) {
         self.edge = edge
+        self.maximumSize = maximumSize
         self.content = content()
     }
 
@@ -37,6 +42,7 @@ public struct LoffoPopoverSurface<Content: View>: View {
 
     public var body: some View {
         content
+            .frame(maxWidth: maximumSize.width, maxHeight: maximumSize.height, alignment: .topLeading)
             .background(LoffoPalette.surface, in: RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius))
             .overlay {
                 RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius)
@@ -52,6 +58,8 @@ public struct LoffoPopoverSurface<Content: View>: View {
             .padding(.trailing, edge == .trailing ? 5 : 0)
             .padding(.top, edge == .top ? 5 : 0)
             .padding(.bottom, edge == .bottom ? 5 : 0)
+            .frame(maxWidth: maximumSize.width + 5, maxHeight: maximumSize.height + 5)
+            .clipped()
     }
 }
 

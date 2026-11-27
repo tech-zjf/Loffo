@@ -4,6 +4,13 @@ Loffo is a native macOS code reader and change reviewer. Keep the main workflow 
 
 Loffo's product priorities are exceptionally low resource use, responsiveness and visual quality. Treat all three as release requirements: measure memory, CPU and latency in realistic single- and multi-project workflows, validate visual and interaction quality in the real app, and fix the underlying design when a requirement is missed. Never claim a target is met without matching evidence.
 
+## Product performance bar
+
+- Make file switching, opening another window, scrolling and syntax refinement feel immediate. Keep input handling and visible-row drawing on the main actor bounded; do not block first paint on full-file parsing or off-screen work.
+- Use the workload and latency budgets in `docs/reviews/performance-acceptance.md` for performance changes and release claims. Measure cold and warm paths, p50/p95/p99, single- and five-window use, memory, CPU and presented frames on the same documented fixture.
+- A model callback, completed task, screenshot or microbenchmark is not evidence of a frame being presented. Record the capture method and environment; if the real app or required hardware cannot be measured, report the gate as unverified.
+- Optimize the end-to-end interaction and remove the source of missed targets. Avoid one-off delays, polling, eager work and caches without explicit ownership and budgets.
+
 ## Before a change
 
 - Read `docs/core-contracts.md` and `docs/implementation-status.md`. The architecture describes the target; the status document records the implemented subset and unpassed gates.
@@ -35,6 +42,14 @@ Loffo's product priorities are exceptionally low resource use, responsiveness an
 - Model errors explicitly. A failed read is not an empty file; an unsupported comparison is not “no changes”. Never use `try?` to turn data loss into success. Best-effort teardown may use `try?` with narrow scope.
 - No force unwraps, `try!` or blanket `@unchecked Sendable` without a documented invariant and test. Do not disable Swift concurrency checking to fix compiler errors.
 - Share immutable data, not window selection/layout state. Introduce global byte admission and visibility-aware scheduling before claiming multi-window budgets.
+
+## Scrolling and navigation
+
+- Route every scrollable surface through `LoffoScrollView` or `LoffoScrollAppearance`; do not create one-off scrollbar styles or hide indicators to work around layout issues.
+- Keep scrollers flush to the scrolling block's outer edge, with no border or outer padding. Use the shared narrow, rounded, neutral-color thumb and transparent track; reserve only the minimum inner content area needed to prevent an overlay scroller from obscuring text.
+- Keyboard selection must keep the selected row visible as it moves, including across both viewport edges. Preserve normal pointer scrolling and avoid jumping the selection to a fixed position when the row is already visible.
+- When adding or restructuring a scrollable region, check its edge alignment, track, thumb, clipping and keyboard-follow behavior in the real app.
+- Keep navigation chrome and the first content row in separate layout regions with a visible gap; verify window controls, brand mark, title and first row at the minimum supported window size.
 
 ## Readability and checks
 

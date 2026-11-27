@@ -65,6 +65,34 @@ import Testing
         cache.value(workspace: workspace, path: "file", comparison: true, expanded: false)?.text == "current")
 }
 
+@Test @MainActor func invalidatingWorkspacePreviewsKeepsOtherWorkspaceAndRejectsOldResults() {
+    let cache = PreviewCache()
+    let replacedWorkspace = URL(fileURLWithPath: "/replaced-project")
+    let otherWorkspace = URL(fileURLWithPath: "/other-project")
+    let oldGeneration = cache.generation
+    cache.insert(
+        CodePresentation(text: "obsolete"), workspace: replacedWorkspace, path: "file",
+        comparison: false, expanded: false, version: 1, generation: oldGeneration)
+    cache.insert(
+        CodePresentation(text: "keep"), workspace: otherWorkspace, path: "file",
+        comparison: false, expanded: false, version: 1, generation: oldGeneration)
+
+    cache.invalidate(workspace: replacedWorkspace)
+    cache.insert(
+        CodePresentation(text: "late obsolete"), workspace: replacedWorkspace, path: "late",
+        comparison: false, expanded: false, version: 2, generation: oldGeneration)
+
+    #expect(
+        cache.value(workspace: replacedWorkspace, path: "file", comparison: false, expanded: false)
+            == nil)
+    #expect(
+        cache.value(workspace: replacedWorkspace, path: "late", comparison: false, expanded: false)
+            == nil)
+    #expect(
+        cache.value(workspace: otherWorkspace, path: "file", comparison: false, expanded: false)?.text
+            == "keep")
+}
+
 @Test @MainActor func discardingPreviewsKeepsActiveValueAndRejectsOlderResults() {
     let cache = PreviewCache()
     let workspace = URL(fileURLWithPath: "/project")

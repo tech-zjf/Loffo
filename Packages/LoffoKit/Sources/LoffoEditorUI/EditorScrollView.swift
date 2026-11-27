@@ -1,6 +1,6 @@
 import AppKit
 
-/// Reserve a fixed lane for the overlay scroller without masking the scrolling content layer.
+/// Keeps editor glyphs outside the overlay scroller while the scroller stays flush with the view edge.
 @MainActor final class EditorScrollView: NSScrollView {
     override func tile() {
         super.tile()

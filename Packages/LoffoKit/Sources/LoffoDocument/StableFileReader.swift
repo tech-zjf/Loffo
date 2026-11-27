@@ -9,20 +9,31 @@ enum StableFileReader {
         let inode: ino_t
     }
     static func read(in root: URL, path: String, limit: Int) throws -> Data {
-        try read(in: root, path: path, limit: limit, afterTraversal: {})
+        try read(in: root, path: path, limit: limit, expectedRootIdentity: nil, afterTraversal: {})
     }
 
     static func read(in root: URL, path: String, limit: Int, afterTraversal: () throws -> Void) throws -> Data
     {
+        try read(
+            in: root, path: path, limit: limit, expectedRootIdentity: nil,
+            afterTraversal: afterTraversal)
+    }
+
+    static func read(
+        in root: URL, path: String, limit: Int, expectedRootIdentity: WorkspaceRootIdentity?,
+        afterTraversal: () throws -> Void = {}
+    ) throws -> Data {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard !parts.isEmpty, !path.contains("\0"),
             parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
         else { throw WorkspaceFailure.unavailable("The file path is outside the opened folder.") }
         let rootDescriptor = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard rootDescriptor >= 0 else {
+            if expectedRootIdentity != nil { throw rootIdentityLookupFailure(errno) }
             throw WorkspaceFailure.unavailable("The opened folder is no longer available.")
         }
         defer { close(rootDescriptor) }
+        try verifyRootIdentity(at: root, descriptor: rootDescriptor, expected: expectedRootIdentity)
         var directory = dup(rootDescriptor)
         guard directory >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         defer { close(directory) }
@@ -56,22 +67,83 @@ enum StableFileReader {
         do { result = .success(try read(directory: directory, name: String(name), limit: limit)) } catch {
             result = .failure(error)
         }
-        try verifyDirectoryChain(root: root, descriptor: rootDescriptor, ancestors: ancestors)
+        try verifyDirectoryChain(
+            root: root, descriptor: rootDescriptor, ancestors: ancestors,
+            expectedRootIdentity: expectedRootIdentity)
         return try result.get()
     }
 
-    private static func verifyDirectoryChain(root: URL, descriptor: Int32, ancestors: [DirectoryIdentity])
-        throws
-    {
+    static func rootIdentity(at root: URL) throws -> WorkspaceRootIdentity {
+        let descriptor = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw rootIdentityLookupFailure(errno)
+        }
+        defer { close(descriptor) }
+        var opened = stat()
+        var path = stat()
+        guard fstat(descriptor, &opened) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard lstat(root.path, &path) == 0 else {
+            throw rootIdentityLookupFailure(errno)
+        }
+        guard opened.st_dev == path.st_dev, opened.st_ino == path.st_ino,
+            path.st_mode & S_IFMT == S_IFDIR
+        else {
+            throw WorkspaceFailure.workspaceRootChangedWhileOpening
+        }
+        return WorkspaceRootIdentity(device: UInt64(opened.st_dev), inode: UInt64(opened.st_ino))
+    }
+
+    static func validateRootIdentity(at root: URL, expected: WorkspaceRootIdentity) throws {
+        let descriptor = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else {
+            throw rootIdentityLookupFailure(errno)
+        }
+        defer { close(descriptor) }
+        try verifyRootIdentity(at: root, descriptor: descriptor, expected: expected)
+    }
+
+    private static func verifyRootIdentity(
+        at root: URL, descriptor: Int32, expected: WorkspaceRootIdentity?
+    ) throws {
+        var opened = stat()
+        var path = stat()
+        guard fstat(descriptor, &opened) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard lstat(root.path, &path) == 0 else {
+            throw rootIdentityLookupFailure(errno)
+        }
+        let matchesExpected =
+            expected.map {
+                UInt64(opened.st_dev) == $0.device && UInt64(opened.st_ino) == $0.inode
+            } ?? true
+        guard opened.st_dev == path.st_dev, opened.st_ino == path.st_ino,
+            path.st_mode & S_IFMT == S_IFDIR, matchesExpected
+        else {
+            if expected != nil { throw WorkspaceFailure.workspaceRootChanged }
+            throw WorkspaceFailure.unavailable(
+                "The file is changing during reading. Waiting for the next update.")
+        }
+    }
+
+    private static func rootIdentityLookupFailure(_ code: Int32) -> WorkspaceFailure {
+        if code == ENOENT || code == ENOTDIR {
+            return .workspaceRootTemporarilyUnavailable
+        }
+        if code == ELOOP {
+            return .workspaceRootChanged
+        }
+        return .unavailable("The opened folder identity could not be verified.")
+    }
+
+    private static func verifyDirectoryChain(
+        root: URL, descriptor: Int32, ancestors: [DirectoryIdentity],
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) throws {
         func verifyRoot() throws {
-            var opened = stat()
-            var path = stat()
-            guard fstat(descriptor, &opened) == 0, lstat(root.path, &path) == 0,
-                opened.st_dev == path.st_dev, opened.st_ino == path.st_ino, path.st_mode & S_IFMT == S_IFDIR
-            else {
-                throw WorkspaceFailure.unavailable(
-                    "The file is changing during reading. Waiting for the next update.")
-            }
+            try verifyRootIdentity(at: root, descriptor: descriptor, expected: expectedRootIdentity)
         }
         try verifyRoot()
         var parent = dup(descriptor)

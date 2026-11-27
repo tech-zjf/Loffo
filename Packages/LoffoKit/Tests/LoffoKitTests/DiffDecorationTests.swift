@@ -5,7 +5,7 @@ import Testing
 
 @testable import LoffoEditorUI
 
-@Test @MainActor func diffBackgroundLeavesNumberColumnsNeutral() async throws {
+@Test @MainActor func diffBackgroundReachesEditorEdgeAndLeavesNumberColumnsNeutral() async throws {
     _ = NSApplication.shared
     let result = DiffResult(
         lines: [
@@ -43,7 +43,8 @@ import Testing
     #expect(try color(10, 31) == color(10, 91), "Old/new line-number columns keep the neutral paper color")
     #expect(try color(98, 31) != color(10, 31), "Deletion tint begins at the sign column")
     #expect(try color(350, 31) == color(98, 31), "Sign and code backgrounds form one continuous row")
-    #expect(try color(498, 31) == color(498, 91), "A paper margin remains at the right edge")
+    #expect(try color(498, 31) == color(350, 31), "Diff tint reaches the edge under the overlay scroller")
+    #expect(try color(498, 31) != color(498, 91), "The right edge follows the row's diff state")
 }
 
 @Test @MainActor func viewportDecorationIsIdenticalForFullAndTiledRedraw() throws {

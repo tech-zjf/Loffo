@@ -271,6 +271,16 @@
         }
       }
     },
+    "Git left output pipes open after process-group cleanup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Git left output pipes open after process-group cleanup."
+          }
+        }
+      }
+    },
     "Git received an invalid argument or environment value.": {
       "localizations": {
         "en": {
@@ -407,6 +417,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "The opened folder is no longer available."
+          }
+        }
+      }
+    },
+    "The opened folder changed after it was selected.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The opened folder changed after it was selected."
+          }
+        }
+      }
+    },
+    "The opened folder changed while it was being opened.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The opened folder changed while it was being opened."
+          }
+        }
+      }
+    },
+    "This workspace provider cannot verify folder identity.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This workspace provider cannot verify folder identity."
           }
         }
       }

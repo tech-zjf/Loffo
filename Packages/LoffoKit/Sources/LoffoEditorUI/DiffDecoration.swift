@@ -24,7 +24,7 @@ import LoffoDomain
                 // The first header leaves room for Old/New labels; later headers span the gutter.
                 let left: CGFloat = index == 0 ? 108 : 16
                 let box = NSRect(
-                    x: left, y: y, width: max(0, viewport.width - left - LoffoMetrics.diffTrailingInset),
+                    x: left, y: y, width: max(0, viewport.width - left),
                     height: LoffoMetrics.line)
                 guard box.width > 0 else { continue }
                 NSColor(LoffoPalette.border.opacity(0.2)).setFill()
@@ -40,7 +40,7 @@ import LoffoDomain
                 NSGraphicsContext.restoreGraphicsState()
             } else if let kind = rowKind(at: index), kind != .context {
                 let box = NSRect(
-                    x: 95, y: y, width: max(0, viewport.width - 95 - LoffoMetrics.diffTrailingInset),
+                    x: 95, y: y, width: max(0, viewport.width - 95),
                     height: LoffoMetrics.line)
                 guard box.width > 0 else { continue }
                 NSColor(kind == .added ? LoffoPalette.addedBackground : LoffoPalette.removedBackground)

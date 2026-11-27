@@ -16,12 +16,12 @@ public actor DocumentStore {
     }
     private enum Key: Hashable, Sendable {
         case absolute(URL)
-        case workspace(URL, String)
+        case workspace(URL, String, WorkspaceRootIdentity?)
 
         var url: URL {
             switch self {
             case .absolute(let url): return url
-            case .workspace(let root, let path): return root.appendingPathComponent(path)
+            case .workspace(let root, let path, _): return root.appendingPathComponent(path)
             }
         }
     }
@@ -32,6 +32,10 @@ public actor DocumentStore {
     var activeReadSubscribers: Int { inFlight.values.reduce(0) { $0 + $1.subscribers.count } }
     private let byteLimit = 2 * 1024 * 1024
     public init(io: BoundedIO) { self.io = io }
+
+    public func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity {
+        try await io.run { try StableFileReader.rootIdentity(at: root) }
+    }
 
     public func discardCachedSnapshots() {
         cacheGeneration &+= 1
@@ -57,7 +61,19 @@ public actor DocumentStore {
     }
 
     public func read(in root: URL, path: String, allowMissing: Bool) async throws -> TextSnapshot {
-        let observation = try await observe(.workspace(root, path))
+        try await read(in: root, path: path, allowMissing: allowMissing, expectedRootIdentity: nil)
+    }
+
+    public func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot {
+        if let expectedRootIdentity {
+            try await io.run {
+                try StableFileReader.validateRootIdentity(at: root, expected: expectedRootIdentity)
+            }
+        }
+        let observation = try await observe(.workspace(root, path, expectedRootIdentity))
         guard allowMissing || !observation.isMissing else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOENT))
         }
@@ -116,8 +132,10 @@ public actor DocumentStore {
                 let data: Data
                 switch key {
                 case .absolute(let url): data = try StableFileReader.read(url, limit: limit)
-                case .workspace(let root, let path):
-                    data = try StableFileReader.read(in: root, path: path, limit: limit)
+                case .workspace(let root, let path, let expectedRootIdentity):
+                    data = try StableFileReader.read(
+                        in: root, path: path, limit: limit,
+                        expectedRootIdentity: expectedRootIdentity)
                 }
                 return try TextLimits.decode(data)
             } catch {

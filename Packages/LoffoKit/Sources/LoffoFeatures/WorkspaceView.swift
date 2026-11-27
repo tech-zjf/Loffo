@@ -7,19 +7,17 @@ import UniformTypeIdentifiers
 
 public struct WorkspaceView: View {
     @ObservedObject private var model: WorkspaceModel
+    @AppStorage("Loffo.diffDisplayMode.sideBySide") private var usesSideBySideDiff = false
     @State private var showsHistory = false
     @State private var showsOutline = false
     @State private var filter = ""
-    @FocusState private var filterFocused: Bool
     @State private var showsFilter = false
     @State private var expanded: Set<String> = []
     @State private var visibleFileRows: [FileTreeRow] = []
     @State private var fileTreeScrollView: NSScrollView?
     @State private var isSidebarCollapsed = false
     @State private var sidebarWidth = LoffoMetrics.sidebar
-    @State private var inspectorWidth = LoffoMetrics.inspector
     @State private var sidebarDragOrigin: CGFloat?
-    @State private var inspectorDragOrigin: CGFloat?
     @State private var syntaxTheme = EditorSyntaxTheme.standard
     @State private var themeImportFailed = false
     @State private var isFileNameHovered = false
@@ -46,6 +44,19 @@ public struct WorkspaceView: View {
             VStack(spacing: 0) {
                 repositoryHeader
                 if model.root == nil { welcome } else { workspace }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if model.root != nil { statusBar }
+        }
+        .overlay {
+            if showsFilter {
+                QuickOpenPanel(
+                    query: $filter,
+                    files: model.showsDiff ? model.changedFiles : model.files,
+                    filesRevision: model.fileTreeRevision,
+                    onOpen: openQuickFile,
+                    onDismiss: dismissFilter)
             }
         }
         .font(.system(size: 12))
@@ -83,8 +94,10 @@ public struct WorkspaceView: View {
     }
 
     private var navigationRail: some View {
-        VStack(spacing: 6) {
-            BrandMark().frame(height: LoffoMetrics.header, alignment: .bottom).padding(.bottom, 8)
+        VStack(spacing: 10) {
+            Color.clear.frame(height: LoffoMetrics.railTopInset)
+            BrandMark().frame(height: LoffoMetrics.header, alignment: .bottom)
+                .padding(.bottom, LoffoMetrics.brandBottomSpacing)
             railButton("folder", title: "Files", active: !isSidebarCollapsed && !model.showsDiff) {
                 selectSidebar(diff: false)
             }
@@ -92,8 +105,6 @@ public struct WorkspaceView: View {
             railButton("branch", title: "Changes", active: !isSidebarCollapsed && model.showsDiff) {
                 selectSidebar(diff: true)
             }
-            railButton("clock.arrow.circlepath", title: "History", active: false) {}
-                .disabled(true).help(L10n.text("Repository history is not available yet"))
             railButton("magnifyingglass", title: "Filter files", active: false) { focusFilter() }
                 .keyboardShortcut("p", modifiers: [.command])
             Spacer()
@@ -102,9 +113,13 @@ public struct WorkspaceView: View {
 
     private func selectSidebar(diff: Bool) {
         if model.showsDiff == diff && !isSidebarCollapsed {
-            isSidebarCollapsed = true
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isSidebarCollapsed = true
+            }
         } else {
-            isSidebarCollapsed = false
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isSidebarCollapsed = false
+            }
             model.setDiff(diff)
         }
     }
@@ -163,57 +178,120 @@ public struct WorkspaceView: View {
     }
 
     private var repositoryHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text(projectDisplayName).fontWeight(.semibold).foregroundStyle(LoffoPalette.text)
                 .lineLimit(1).truncationMode(.middle).accessibilityLabel(projectDisplayName)
-                .font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-                .padding(.trailing, 12)
-            if model.root != nil {
-                HStack(spacing: 9) {
-                    Image(systemName: "arrow.triangle.branch").foregroundStyle(LoffoPalette.secondary)
-                    Text(L10n.text(model.branchLabel)).lineLimit(1).truncationMode(.middle).help(
-                        model.branchLabel)
-                    Image(systemName: "chevron.down").font(.system(size: 8))
-                }.font(.system(size: 11)).padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(.black.opacity(0.018), in: Capsule())
-                if !model.showsDiff {
-                    Image(systemName: "arrow.left.arrow.right").foregroundStyle(LoffoPalette.secondary)
-                    Text("HEAD").font(.system(size: 11)).padding(.horizontal, 14).padding(.vertical, 6)
-                        .background(.black.opacity(0.018), in: Capsule())
-                }
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(model.error == nil && model.monitoringAvailable ? LoffoPalette.added : .orange)
-                        .frame(width: 4, height: 4)
-                    Text(
-                        L10n.text(
-                            !model.monitoringAvailable
-                                ? "File monitoring unavailable"
-                                : (model.isUpdating ? "Updating" : "Watching files")))
-                }.font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
-            }
             Spacer(minLength: 0)
+            if !model.showsDiff { readerToolbarContent }
         }.padding(.leading, 28).padding(.trailing, 24).frame(height: LoffoMetrics.header)
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                Text(L10n.text(model.branchLabel)).lineLimit(1).truncationMode(.middle)
+                    .help(model.branchLabel)
+            }
+            .accessibilityElement(children: .combine)
+
+            if model.showsDiff {
+                Label(L10n.text(model.baselineLabel), systemImage: "arrow.left.arrow.right")
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(model.error == nil && model.monitoringAvailable ? LoffoPalette.added : .orange)
+                    .frame(width: 5, height: 5)
+                Text(
+                    L10n.text(
+                        !model.monitoringAvailable
+                            ? "File monitoring unavailable"
+                            : (model.isUpdating || model.isRefreshingFiles ? "Updating" : "Watching files")
+                    )
+                )
+                .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            if let path = model.selected {
+                HStack(spacing: 5) {
+                    Text(path).lineLimit(1).truncationMode(.middle).help(path)
+                    Button {
+                        copyPathFeedback.copy(path) { value in
+                            NSPasteboard.general.clearContents()
+                            return NSPasteboard.general.setString(value, forType: .string)
+                        }
+                    } label: {
+                        Image(systemName: copyPathFeedback.isCopied ? "checkmark" : "square.on.square")
+                            .font(.system(size: 10))
+                            .foregroundStyle(
+                                copyPathFeedback.isCopied ? LoffoPalette.added : LoffoPalette.text
+                            )
+                            .frame(width: 18, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .focused($copyPathFocused)
+                    .opacity(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused ? 1 : 0)
+                    .allowsHitTesting(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused)
+                    .help(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
+                    .accessibilityLabel(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
+                }
+                .frame(maxWidth: 420, alignment: .trailing)
+                .contentShape(Rectangle())
+                .onHover { isFileNameHovered = $0 }
+            }
+
+            if let fileExtension = model.selected.map({
+                URL(fileURLWithPath: $0).pathExtension.uppercased()
+            }), !fileExtension.isEmpty {
+                Text(fileExtension).lineLimit(1).help(L10n.format("File type: %@", fileExtension))
+            }
+            if model.selected != nil {
+                Text(L10n.text("UTF-8"))
+                if !model.showsDiff {
+                    Image(systemName: "lock").help(L10n.text("Read only"))
+                }
+            }
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(LoffoPalette.secondary)
+        .padding(.horizontal, 12)
+        .frame(height: LoffoMetrics.statusBar)
+        .background(LoffoPalette.canvas)
+        .overlay(alignment: .top) { Rectangle().fill(LoffoPalette.border).frame(height: 0.5) }
     }
 
     private var workspace: some View {
         GeometryReader { geometry in
             HStack(alignment: .top, spacing: 0) {
-                if !isSidebarCollapsed {
-                    sidebar.frame(width: sidebarWidth)
+                if !isSidebarCollapsed || sidebarDragOrigin != nil {
+                    sidebar.frame(width: isSidebarCollapsed ? 0 : sidebarWidth)
+                        .clipped().opacity(isSidebarCollapsed ? 0 : 1)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
                     paneDivider(title: "Resize sidebar") { delta in
-                        let maxWidth = max(
-                            220, geometry.size.width - (model.showsDiff ? inspectorWidth + 430 : 430))
-                        sidebarWidth = min(
-                            max(0, (sidebarDragOrigin ?? sidebarWidth) + delta), min(440, maxWidth))
+                        let maxWidth = min(440, max(220, geometry.size.width - 430))
+                        let resolution = SidebarResize.resolve(
+                            startWidth: sidebarDragOrigin ?? sidebarWidth,
+                            translation: delta,
+                            maximumWidth: maxWidth)
+                        if resolution.isCollapsed != isSidebarCollapsed {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isSidebarCollapsed = resolution.isCollapsed
+                            }
+                        }
+                        if !resolution.isCollapsed { sidebarWidth = resolution.width }
                     } onBegin: {
                         sidebarDragOrigin = sidebarWidth
                     } onEnd: {
                         sidebarDragOrigin = nil
-                    }
+                    }.frame(width: isSidebarCollapsed && sidebarDragOrigin == nil ? 0 : 5)
                 }
                 VStack(spacing: 0) {
-                    documentToolbar
+                    if model.showsDiff { documentToolbar }
                     if let error = model.error {
                         Label(error, systemImage: "exclamationmark.circle")
                             .font(.system(size: 11)).foregroundStyle(LoffoPalette.secondary)
@@ -229,31 +307,18 @@ public struct WorkspaceView: View {
                             .padding(12).background(LoffoPalette.selection)
                     }
                     if let presentation = model.presentation {
-                        if model.showsDiff {
-                            HStack(spacing: 8) {
-                                Text(
-                                    L10n.text(
-                                        model.isInitialComparison
-                                            ? "Initial → Working tree" : "HEAD → Working tree")
-                                )
-                                .padding(.horizontal, 10).padding(.vertical, 4)
-                                .background(.black.opacity(0.018), in: Capsule())
-                                if model.error == nil && model.changesError == nil
-                                    && model.monitoringAvailable
-                                {
-                                    Circle().fill(LoffoPalette.added).frame(width: 4, height: 4)
-                                    Text(
-                                        L10n.text(
-                                            model.isUpdating || model.isRefreshingFiles ? "Updating" : "Live")
-                                    )
-                                }
-                                Spacer()
-                            }.font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
-                                .padding(.horizontal, 20).frame(height: 31, alignment: .top).offset(y: -4)
+                        if model.showsDiff, usesSideBySideDiff, presentation.sideBySide != nil {
+                            SideBySideDiffView(
+                                presentation: presentation, navigation: model.navigation,
+                                hunkCursor: model.hunkCursor,
+                                accessibilityName: model.selected ?? L10n.text("Code"),
+                                syntaxTheme: syntaxTheme)
+                        } else {
+                            CodeEditor(
+                                presentation: presentation, navigation: model.navigation,
+                                accessibilityName: model.selected ?? L10n.text("Code"),
+                                syntaxTheme: syntaxTheme)
                         }
-                        CodeEditor(
-                            presentation: presentation, navigation: model.navigation,
-                            accessibilityName: model.selected ?? L10n.text("Code"), syntaxTheme: syntaxTheme)
                     } else if model.showsDiff, let changesError = model.changesError {
                         ContentUnavailableView(
                             L10n.text("Changes unavailable"), systemImage: "exclamationmark.triangle",
@@ -285,21 +350,6 @@ public struct WorkspaceView: View {
                             LoffoPalette.border.opacity(0.3), lineWidth: 0.5)
                     )
                     .padding(.trailing, model.showsDiff ? 4 : 0)
-                if model.showsDiff, let result = model.presentation?.diff {
-                    paneDivider(title: "Resize changes panel") { delta in
-                        let maxWidth = max(
-                            250, geometry.size.width - (isSidebarCollapsed ? 0 : sidebarWidth) - 430)
-                        inspectorWidth = min(
-                            max(240, (inspectorDragOrigin ?? inspectorWidth) - delta), min(460, maxWidth))
-                    } onBegin: {
-                        inspectorDragOrigin = inspectorWidth
-                    } onEnd: {
-                        inspectorDragOrigin = nil
-                    }
-                    inspector(result).frame(width: inspectorWidth)
-                } else if model.showsDiff && model.selected != nil {
-                    Color.clear.frame(width: inspectorWidth)
-                }
             }.padding(.trailing, 4).padding(.bottom, 14)
         }
     }
@@ -313,7 +363,7 @@ public struct WorkspaceView: View {
         }.contentShape(Rectangle()).gesture(
             DragGesture(minimumDistance: 1, coordinateSpace: .global)
                 .onChanged { value in
-                    if sidebarDragOrigin == nil && inspectorDragOrigin == nil { onBegin() }
+                    if sidebarDragOrigin == nil { onBegin() }
                     onChange(value.translation.width)
                 }
                 .onEnded { _ in onEnd() }
@@ -324,21 +374,30 @@ public struct WorkspaceView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if showsFilter {
-                TextField(L10n.text("Filter files"), text: $filter).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel(L10n.text("Filter files"))
-                    .focused($filterFocused)
-                    .task { filterFocused = true }
-                    .onSubmit { openFirstMatch() }
-                    .onExitCommand { dismissFilter() }
-            }
             ScrollViewReader { proxy in
-                LoffoScrollView(onScrollView: { fileTreeScrollView = $0 }) {
+                LoffoScrollView(
+                    onScrollView: { fileTreeScrollView = $0 }, scrollbarGutter: 12
+                ) {
                     LazyVStack(spacing: 0) {
                         if model.showsDiff {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 7) {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .foregroundStyle(LoffoPalette.accent)
+                                    Text(model.branchLabel).lineLimit(1).truncationMode(.middle)
+                                        .help(model.branchLabel)
+                                }
+                                .font(.system(size: 10, weight: .medium))
+                                .padding(.horizontal, 8).padding(.top, 8)
+                                Text(L10n.text("Changes"))
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(LoffoPalette.secondary)
+                                    .padding(.horizontal, 8).padding(.top, 4)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             ForEach(FileTreeNode.matching(model.changedFiles, query: filter)) { file in
                                 Button {
-                                    model.select(file.path)
+                                    openQuickFile(file.path)
                                 } label: {
                                     HStack(spacing: 8) {
                                         Image(systemName: "doc").font(.system(size: 11))
@@ -364,6 +423,32 @@ public struct WorkspaceView: View {
                                 Text(error).font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
                                     .padding(8)
                             }
+                            Divider().padding(.horizontal, 8).padding(.top, 8)
+                            Text(L10n.text("Recent commits"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(LoffoPalette.secondary)
+                                .padding(.horizontal, 8).padding(.top, 4)
+                            ForEach(model.repositoryHistory) { commit in
+                                repositoryCommitRow(commit)
+                                    .padding(.horizontal, 8)
+                            }
+                            if model.repositoryHistoryIsLoading {
+                                ProgressView().controlSize(.small)
+                                    .frame(maxWidth: .infinity).padding(8)
+                            } else if let error = model.repositoryHistoryError {
+                                Text(error).font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
+                                    .textSelection(.enabled).padding(8)
+                            } else if model.repositoryHistory.isEmpty {
+                                Text(L10n.text("No commits yet"))
+                                    .font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
+                                    .padding(8)
+                            } else if model.repositoryHistoryHasMore {
+                                Button(L10n.text("Load more commits")) {
+                                    model.loadMoreRepositoryHistory()
+                                }
+                                .font(.system(size: 10)).buttonStyle(.plain)
+                                .foregroundStyle(LoffoPalette.accent).padding(8)
+                            }
                         } else {
                             ForEach(visibleFileRows) { row in
                                 treeRow(row)
@@ -372,8 +457,7 @@ public struct WorkspaceView: View {
                     }
                     // The same path has different row content in Files and Changes.
                     .id(model.showsDiff)
-                    // Keep row labels outside the overlay scroller's hit and paint lane.
-                    .padding(.trailing, 20)
+                    .padding(.top, 8)
                 }
                 .task(id: SidebarSelection(path: model.selected, diff: model.showsDiff)) {
                     // Expansion must produce the lazy row before asking ScrollViewReader to reveal it.
@@ -394,7 +478,7 @@ public struct WorkspaceView: View {
                     .font(.system(size: 10)).foregroundStyle(LoffoPalette.secondary)
                     .lineLimit(2).padding(.vertical, 6)
             }
-        }.padding(.leading, 24).padding(.trailing, 8)
+        }.padding(.leading, 24)
             .onAppear { rebuildVisibleFileRows() }
     }
 
@@ -412,7 +496,7 @@ public struct WorkspaceView: View {
                     }
                     toggleVisibleFileRows(for: node.path)
                 } else {
-                    model.select(node.path)
+                    openQuickFile(node.path)
                 }
             } label: {
                 HStack(spacing: 8) {
@@ -458,6 +542,26 @@ public struct WorkspaceView: View {
                         ? (model.selected == node.path ? "Selected" : "Not selected")
                         : (!row.isExpanded ? "Collapsed" : "Expanded")
                 ))
+    }
+
+    private func repositoryCommitRow(_ commit: FileCommit) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(String(commit.id.prefix(7))).font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(LoffoPalette.accent)
+                Spacer(minLength: 4)
+                if let date = commit.committedAt {
+                    Text(date.formatted(date: .abbreviated, time: .shortened))
+                        .font(.system(size: 9)).foregroundStyle(LoffoPalette.secondary)
+                }
+            }
+            Text(commit.subject).font(.system(size: 10)).lineLimit(2)
+                .foregroundStyle(LoffoPalette.text).textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 7)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(String(commit.id.prefix(7))), \(commit.subject)")
     }
 
     private func rebuildVisibleFileRows() {
@@ -506,98 +610,44 @@ public struct WorkspaceView: View {
         }.frame(height: LoffoMetrics.toolbar)
     }
 
+    private var readerToolbarContent: some View {
+        HStack(spacing: 8) {
+            Button {
+                showsHistory.toggle()
+            } label: {
+                Label(L10n.text("History"), systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.text("History"))
+            .help(L10n.text("History"))
+            .loffoPopover(isPresented: $showsHistory) {
+                LoffoScrollView {
+                    historyPanel.padding(18).frame(width: 300, alignment: .topLeading)
+                }
+                .frame(maxHeight: 520)
+            }
+
+            Button {
+                showsOutline.toggle()
+            } label: {
+                Label(L10n.text("Outline"), systemImage: "list.bullet.indent")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.text("Outline"))
+            .help(L10n.text("Outline"))
+            .loffoPopover(isPresented: $showsOutline, arrowEdge: .leading) {
+                outlinePopover
+            }
+
+            fileActionsMenu
+        }
+    }
+
     private func documentToolbarContent(compact: Bool) -> some View {
         HStack(spacing: compact ? 8 : 12) {
-            if !compact,
-                let fileExtension = model.selected.map({ URL(fileURLWithPath: $0).pathExtension.uppercased() }
-                ),
-                !fileExtension.isEmpty
-            {
-                Text(fileExtension)
-                    .font(.system(size: 11, weight: .medium)).fixedSize()
-                    .padding(.horizontal, 8).frame(height: 26)
-                    .background(Color.purple.opacity(0.055), in: RoundedRectangle(cornerRadius: 4))
-            }
-            HStack(spacing: 5) {
-                Text(model.selected ?? L10n.text("Your code, in focus."))
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1).truncationMode(.middle)
-                    .help(model.selected ?? "").accessibilityLabel(model.selected ?? L10n.text("Code"))
-                    .layoutPriority(1)
-                if let path = model.selected {
-                    Button {
-                        copyPathFeedback.copy(path) { value in
-                            NSPasteboard.general.clearContents()
-                            return NSPasteboard.general.setString(value, forType: .string)
-                        }
-                    } label: {
-                        Image(systemName: copyPathFeedback.isCopied ? "checkmark" : "square.on.square")
-                            .font(.system(size: 11))
-                            .foregroundStyle(
-                                copyPathFeedback.isCopied ? LoffoPalette.added : LoffoPalette.secondary
-                            )
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .focused($copyPathFocused)
-                    .opacity(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused ? 1 : 0)
-                    .allowsHitTesting(isFileNameHovered || copyPathFeedback.isCopied || copyPathFocused)
-                    .help(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
-                    .accessibilityLabel(L10n.text(copyPathFeedback.isCopied ? "Copied" : "Copy path"))
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onHover { isFileNameHovered = $0 }
-            Spacer(minLength: compact ? 0 : 8)
-            if !model.showsDiff && !compact {
-                Label(L10n.text("Read only"), systemImage: "lock").font(.system(size: 11))
-                    .padding(.horizontal, 12).padding(.vertical, 5).background(
-                        .black.opacity(0.025), in: Capsule()
-                    )
-                    .foregroundStyle(LoffoPalette.secondary)
-            }
-            if !model.showsDiff {
-                Button {
-                    showsHistory.toggle()
-                } label: {
-                    if compact {
-                        Image(systemName: "clock.arrow.circlepath")
-                    } else {
-                        Label(L10n.text("History"), systemImage: "clock.arrow.circlepath").font(
-                            .system(size: 12))
-                    }
-                }.buttonStyle(.plain).frame(width: compact ? 28 : 96)
-                    .accessibilityLabel(L10n.text("History")).help(L10n.text("History"))
-                    .loffoPopover(isPresented: $showsHistory) {
-                        historyPanel.padding(18).frame(width: 300)
-                    }
-                Button {
-                    showsOutline.toggle()
-                } label: {
-                    if compact {
-                        Image(systemName: "list.bullet.indent")
-                    } else {
-                        Label(L10n.text("Outline"), systemImage: "list.bullet.indent").font(.system(size: 12))
-                    }
-                }.buttonStyle(.plain).frame(width: compact ? 28 : 96)
-                    .accessibilityLabel(L10n.text("Outline")).help(L10n.text("Outline"))
-                    .loffoPopover(isPresented: $showsOutline) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(L10n.text("File outline")).fontWeight(.medium)
-                            ForEach(outline, id: \.self) {
-                                Text($0).font(.system(size: 11, design: .monospaced)).textSelection(
-                                    .enabled)
-                            }
-                            if outline.isEmpty {
-                                Text(L10n.text("No declarations in this file")).foregroundStyle(
-                                    LoffoPalette.secondary)
-                            }
-                        }.padding(18).frame(width: 360)
-                    }
-            }
+            Spacer(minLength: 0)
             if model.showsDiff && model.changesError == nil {
                 HStack(spacing: 10) {
                     Button {
@@ -621,106 +671,67 @@ public struct WorkspaceView: View {
                     .horizontal, 10
                 ).padding(.vertical, 6)
                     .background(.black.opacity(0.015), in: RoundedRectangle(cornerRadius: 8))
-                if !compact {
-                    Image(systemName: "rectangle.split.2x1").foregroundStyle(
-                        LoffoPalette.secondary.opacity(0.5)
-                    )
-                    .help(L10n.text("Split diff is not available yet"))
-                    Image(systemName: "list.bullet").foregroundStyle(LoffoPalette.accent)
-                        .padding(7).background(LoffoPalette.selection, in: RoundedRectangle(cornerRadius: 8))
-                        .help(L10n.text("Unified diff"))
-                }
+                diffModeToggle(compact: compact)
             }
-            Menu {
-                Button(L10n.text("Reload File and Baseline")) { model.reload() }
-                Button(L10n.text("Import Editor Theme…"), action: chooseSyntaxTheme)
-                Button(L10n.text("Use Default Syntax Theme")) {
-                    syntaxTheme = .standard
-                    UserDefaults.standard.removeObject(forKey: "Loffo.editorThemeJSON")
-                }
-                Button(L10n.text("Filter Files")) { focusFilter() }
-                if model.showsDiff {
-                    Button(L10n.text(model.expandsContext ? "Collapse Context" : "Show Full File")) {
-                        model.toggleContext()
-                    }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().tint(LoffoPalette.text)
-            .accessibilityLabel(
-                L10n.text("File actions"))
+            fileActionsMenu
         }.padding(.horizontal, compact ? 12 : 20).frame(height: LoffoMetrics.toolbar)
     }
 
-    private func inspector(_ result: DiffResult) -> some View {
-        GeometryReader { geometry in
-            LoffoScrollView {
-                inspectorContent(result).frame(minHeight: geometry.size.height, alignment: .top)
+    private var outlinePopover: some View {
+        LoffoScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(L10n.text("File outline")).fontWeight(.medium)
+                ForEach(outline, id: \.self) { OutlineSymbolRow(name: $0) }
+                if outline.isEmpty {
+                    Text(L10n.text("No declarations in this file"))
+                        .foregroundStyle(LoffoPalette.secondary)
+                }
             }
+            .padding(18)
+            .frame(width: 360, alignment: .topLeading)
         }
+        .frame(maxHeight: 520)
     }
 
-    private func inspectorContent(_ result: DiffResult) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            VStack(alignment: .leading, spacing: 16) {
-                Label(L10n.text("Changes in this file"), systemImage: "doc.text")
-                    .font(.system(size: 13, weight: .medium))
-                HStack(spacing: 10) {
-                    Text(L10n.format("+%ld Added", result.added)).foregroundStyle(LoffoPalette.added)
-                        .padding(.horizontal, 12).padding(.vertical, 4).background(
-                            LoffoPalette.addedBackground, in: Capsule())
-                    Text(L10n.format("−%ld Removed", result.removed)).foregroundStyle(LoffoPalette.removed)
-                        .padding(.horizontal, 12).padding(.vertical, 4).background(
-                            LoffoPalette.removedBackground, in: Capsule())
-                }.font(.system(size: 11))
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(L10n.text("Review")).font(.system(size: 11))
-                        HStack {
-                            Label(
-                                L10n.text(model.reviewed ? "Reviewed" : "Not reviewed"),
-                                systemImage: model.reviewed ? "checkmark.circle" : "circle"
-                            )
-                            .font(.system(size: 11)).foregroundStyle(LoffoPalette.secondary)
-                            Spacer(minLength: 4)
-                            Button {
-                                model.markReviewed()
-                            } label: {
-                                Label(L10n.text("Mark as reviewed"), systemImage: "checkmark").font(
-                                    .system(size: 10)
-                                )
-                                .foregroundStyle(LoffoPalette.removed).padding(8)
-                                .background(LoffoPalette.selection, in: RoundedRectangle(cornerRadius: 6))
-                            }.buttonStyle(.plain).disabled(!model.canReview || model.reviewed)
-                        }
-                    }
+    private var fileActionsMenu: some View {
+        Menu {
+            Button(L10n.text("Reload File and Baseline")) { model.reload() }
+            Button(L10n.text("Import Editor Theme…"), action: chooseSyntaxTheme)
+            Button(L10n.text("Use Default Syntax Theme")) {
+                syntaxTheme = .standard
+                UserDefaults.standard.removeObject(forKey: "Loffo.editorThemeJSON")
+            }
+            Button(L10n.text("Filter Files")) { focusFilter() }
+            if model.showsDiff {
+                Button(L10n.text(model.expandsContext ? "Collapse Context" : "Show Full File")) {
+                    model.toggleContext()
                 }
-                Divider().opacity(0.25)
-                lastCommit
-                if result.isCoarse {
-                    Text(L10n.text("Large rewrite · coarse comparison")).foregroundStyle(.orange)
-                }
-                if let last = result.lines.last(where: { $0.kind != .added }), !last.text.hasSuffix("\n") {
-                    Text(L10n.text("Before: no final newline"))
-                }
-                if let last = result.lines.last(where: { $0.kind != .removed }), !last.text.hasSuffix("\n") {
-                    Text(L10n.text("After: no final newline"))
-                }
-            }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    LoffoPalette.inspectorSurface, in: RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius)
-                )
-                .fixedSize(horizontal: false, vertical: true)
-                .overlay(
-                    RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius).strokeBorder(
-                        LoffoPalette.border.opacity(0.25), lineWidth: 0.5))
-            fileHistoryList.padding(18).frame(
-                maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading
-            )
-            .background(
-                LoffoPalette.inspectorSurface, in: RoundedRectangle(cornerRadius: LoffoMetrics.cardRadius))
-        }.font(.system(size: 10)).padding(.leading, 2).frame(maxHeight: .infinity)
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().tint(LoffoPalette.text)
+        .accessibilityLabel(L10n.text("File actions"))
+    }
+
+    private func diffModeToggle(compact: Bool) -> some View {
+        let currentMode = usesSideBySideDiff ? "Side-by-side diff" : "Unified diff"
+        let nextMode = usesSideBySideDiff ? "Switch to unified diff" : "Switch to side-by-side diff"
+        let icon = usesSideBySideDiff ? "rectangle.split.2x1" : "list.bullet"
+        return Button {
+            usesSideBySideDiff.toggle()
+        } label: {
+            Image(systemName: icon)
+                .foregroundStyle(LoffoPalette.accent)
+                .frame(width: compact ? 26 : 30, height: 28)
+                .background(LoffoPalette.selection, in: RoundedRectangle(cornerRadius: 7))
+                .contentShape(RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .help(L10n.text(nextMode))
+        .accessibilityLabel(L10n.text("Toggle diff layout"))
+        .accessibilityValue(L10n.text(currentMode))
+        .accessibilityAddTraits(.isToggle)
     }
 
     private var outline: [String] {
@@ -760,21 +771,14 @@ public struct WorkspaceView: View {
 
     private func focusFilter() {
         showsFilter = true
-        filterFocused = true
     }
 
     private func dismissFilter() {
-        filterFocused = false
         showsFilter = false
         filter = ""
     }
 
-    private func openFirstMatch() {
-        let path =
-            model.showsDiff
-            ? FileTreeNode.matching(model.changedFiles, query: filter).first?.path
-            : FileTreeNode.firstFile(in: FileTreeNode.matching(model.fileTree, query: filter))
-        guard let path else { return }
+    private func openQuickFile(_ path: String) {
         model.select(path)
         dismissFilter()
     }
@@ -818,7 +822,8 @@ private struct BrandMark: View {
     }()
     var body: some View {
         if let image = Self.image {
-            Image(nsImage: image).resizable().scaledToFit().frame(width: 28, height: 28)
+            Image(nsImage: image).resizable().scaledToFit()
+                .frame(width: LoffoMetrics.brandMark, height: LoffoMetrics.brandMark)
                 .accessibilityLabel(L10n.text("Loffo"))
         }
     }
@@ -902,7 +907,7 @@ struct PathTooltipCard: View {
 
     var body: some View {
         let size = contentSize
-        ScrollView(.vertical) {
+        LoffoScrollView {
             Text(text)
                 .font(.system(size: 11))
                 .foregroundStyle(LoffoPalette.text)
@@ -910,9 +915,22 @@ struct PathTooltipCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(width: size.width, height: size.height)
-        .scrollIndicators(.hidden)
-        .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .fixedSize()
+    }
+}
+
+struct OutlineSymbolRow: View {
+    let name: String
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: 11, design: .monospaced))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(width: 324, alignment: .leading)
+            .clipped()
+            .textSelection(.enabled)
+            .help(name)
     }
 }

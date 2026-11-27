@@ -5,6 +5,50 @@ import Testing
 
 @testable import LoffoEditorUI
 
+@Test @MainActor func sharedScrollAppearanceUsesReadableOverlayScrollers() {
+    _ = NSApplication.shared
+    let scroll = NSScrollView()
+    scroll.hasVerticalScroller = true
+    scroll.hasHorizontalScroller = true
+
+    LoffoScrollAppearance.apply(to: scroll)
+
+    #expect(scroll.scrollerStyle == .overlay)
+    #expect(scroll.borderType == .noBorder)
+    #expect(!scroll.drawsBackground)
+    #expect(scroll.scrollerInsets.top == 0)
+    #expect(scroll.scrollerInsets.left == 0)
+    #expect(scroll.scrollerInsets.bottom == 0)
+    #expect(scroll.scrollerInsets.right == 0)
+    #expect(scroll.verticalScroller is LoffoScroller)
+    #expect(scroll.horizontalScroller is LoffoScroller)
+    #expect(scroll.verticalScroller?.controlSize == .regular)
+    #expect(scroll.horizontalScroller?.controlSize == .regular)
+    #expect(LoffoScroller.thumbThickness == 9)
+}
+
+@Test @MainActor func linkedDiffViewportsSyncVerticalPositionAndKeepHorizontalOffsets() {
+    _ = NSApplication.shared
+    func scrollView() -> NSScrollView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 240, height: 160))
+        let document = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 1_200))
+        scroll.documentView = document
+        return scroll
+    }
+    let before = scrollView()
+    let after = scrollView()
+    let link = LinkedEditorViewport()
+    link.attach(before, side: .before)
+    link.attach(after, side: .after)
+    before.contentView.scroll(to: NSPoint(x: 140, y: 360))
+    after.contentView.scroll(to: NSPoint(x: 22, y: 0))
+
+    link.synchronize(from: before, side: .before)
+
+    #expect(after.contentView.bounds.minY == 360)
+    #expect(after.contentView.bounds.minX == 22)
+}
+
 @Test @MainActor func nativeSelectionLeaseDefersRefreshAndCopiesVisibleCode() async throws {
     _ = NSApplication.shared
     let initial = "const a = 'é';\nconst b = 1;\n"
@@ -234,7 +278,7 @@ import Testing
         host.layoutSubtreeIfNeeded()
         #expect(surface.gutter.frame.maxX == scroll.frame.minX)
         #expect(surface.gutter.frame.width == (presentation.diff == nil ? 48 : 118))
-        #expect(scroll.frame.maxX == surface.bounds.maxX - (presentation.diff == nil ? 0 : 12))
+        #expect(scroll.frame.maxX == surface.bounds.maxX)
         #expect(abs(scroll.contentView.bounds.minX) < 1)
         #expect(scroll.layer?.masksToBounds == true)
         #expect(scroll.contentView.layer?.masksToBounds == true)
@@ -242,6 +286,7 @@ import Testing
         let clip = scroll.contentView.convert(scroll.contentView.bounds, to: scroll)
         let scroller = try #require(scroll.verticalScroller)
         #expect(clip.maxX <= scroller.frame.minX)
+        #expect(scroller.frame.maxX == scroll.bounds.maxX)
         let rulerFrame = surface.gutter.frame
         scroll.contentView.scroll(to: NSPoint(x: 180, y: 0))
         scroll.reflectScrolledClipView(scroll.contentView)
@@ -428,7 +473,7 @@ import Testing
 @Test @MainActor func newerPresentationNeverAppliesAnOlderPendingPatch() async throws {
     _ = NSApplication.shared
     let text = TrackingTextView(usingTextLayoutManager: true)
-    let scroll = EditorScrollView()
+    let scroll = NSScrollView()
     scroll.documentView = text
     let surface = EditorSurface(scroll: scroll, gutterWidth: 48)
     let coordinator = CodeEditor.Coordinator()

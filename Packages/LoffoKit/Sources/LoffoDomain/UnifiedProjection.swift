@@ -1,15 +1,17 @@
 import Foundation
 
-public struct PresentedLine: Sendable {
+public struct PresentedLine: Sendable, Equatable {
     public let line: DiffLine?
     public let heading: String?
+    public let isPlaceholder: Bool
     public var text: String {
         guard let line else { return "\n" }
         return line.text.hasSuffix("\n") ? line.text : line.text + "\n"
     }
-    public init(line: DiffLine?, heading: String? = nil) {
+    public init(line: DiffLine?, heading: String? = nil, isPlaceholder: Bool = false) {
         self.line = line
         self.heading = heading
+        self.isPlaceholder = isPlaceholder
     }
 }
 

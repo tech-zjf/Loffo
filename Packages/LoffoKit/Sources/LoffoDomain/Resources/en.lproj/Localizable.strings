@@ -11,6 +11,7 @@
 "Git is unavailable for this folder." = "Git is unavailable for this folder.";
 "Git is unavailable." = "Git is unavailable.";
 "Git is unavailable. Files remain readable; set LOFFO_GIT_EXECUTABLE to enable comparisons." = "Git is unavailable. Files remain readable; set LOFFO_GIT_EXECUTABLE to enable comparisons.";
+"Git left output pipes open after process-group cleanup." = "Git left output pipes open after process-group cleanup.";
 "Git metadata location is unavailable." = "Git metadata location is unavailable.";
 "Git received an invalid argument or environment value." = "Git received an invalid argument or environment value.";
 "Git returned an invalid baseline tree entry." = "Git returned an invalid baseline tree entry.";
@@ -28,6 +29,8 @@
 "The file is changing during reading. Waiting for the next update." = "The file is changing during reading. Waiting for the next update.";
 "The file path is outside the opened folder." = "The file path is outside the opened folder.";
 "The folder cannot be read." = "The folder cannot be read.";
+"The opened folder changed after it was selected." = "The opened folder changed after it was selected.";
+"The opened folder changed while it was being opened." = "The opened folder changed while it was being opened.";
 "The opened folder is no longer available." = "The opened folder is no longer available.";
 "The repository branch cannot be read." = "The repository branch cannot be read.";
 "The shared processing budget is full. Retry after other work finishes." = "The shared processing budget is full. Retry after other work finishes.";
@@ -39,5 +42,6 @@
 "This file uses %@. Reading is available; exact comparison is not supported by this prototype." = "This file uses %@. Reading is available; exact comparison is not supported by this prototype.";
 "This folder does not have an available Git baseline." = "This folder does not have an available Git baseline.";
 "This is a binary file. Image and binary previews are not available yet." = "This is a binary file. Image and binary previews are not available yet.";
+"This workspace provider cannot verify folder identity." = "This workspace provider cannot verify folder identity.";
 "Unmerged index entries could not be listed." = "Unmerged index entries could not be listed.";
 "Untracked files could not be listed." = "Untracked files could not be listed.";

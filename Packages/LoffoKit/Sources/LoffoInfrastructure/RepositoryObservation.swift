@@ -16,6 +16,7 @@ import LoffoDomain
     private var stopped = false
 
     var isActive: Bool { stream != nil && !rootChanged }
+    var isStarting: Bool { startTask != nil }
 
     init(root: URL) {
         self.root = root
@@ -29,10 +30,7 @@ import LoffoDomain
 
     func startIfNeeded() async {
         guard !isActive else { return }
-        if let startTask {
-            await startTask.value
-            return
-        }
+        guard startTask == nil else { return }
 
         if stream != nil { stop() }
         stopped = false
@@ -45,7 +43,9 @@ import LoffoDomain
             await finishStarting(result, token: token)
         }
         startTask = task
-        await task.value
+        // FSEventStreamCreate can block in the system while resolving parent directories.
+        // Keep workspace opening independent from that setup; callers can render the initial
+        // file tree while the lease remains inactive, and the model retries/refreshes once ready.
     }
 
     private func finishStarting(_ result: StartedStream, token: UUID) {

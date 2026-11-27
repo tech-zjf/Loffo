@@ -1,7 +1,10 @@
 import Foundation
 
 public struct CodeNavigation: Sendable {
-    public let id = UUID()
+    public let id: UUID
     public let line: Int
-    public init(line: Int) { self.line = max(0, line) }
+    public init(line: Int, id: UUID = UUID()) {
+        self.id = id
+        self.line = max(0, line)
+    }
 }

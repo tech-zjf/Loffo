@@ -14,15 +14,21 @@ for bundle in "$bin"/*.bundle; do
     cp -R "$bundle" "$app/Contents/Resources/"
 done
 if [ -f "$root/designs/brand/loffo-symbol-transparent.png" ]; then
+    transparent_icon="$root/designs/brand/loffo-symbol-transparent.png"
+    app_icon="$root/assets/brand/loffo-symbol-white-background.png"
+    if [ ! -f "$app_icon" ]; then
+        echo "Missing opaque app icon source: $app_icon" >&2
+        exit 1
+    fi
     iconset="$root/build/Loffo.iconset"
     mkdir -p "$iconset"
     for size in 16 32 128 256 512; do
-        sips -z "$size" "$size" "$root/designs/brand/loffo-symbol-transparent.png" --out "$iconset/icon_${size}x${size}.png" >/dev/null
+        sips -z "$size" "$size" "$app_icon" --out "$iconset/icon_${size}x${size}.png" >/dev/null
         retina=$((size * 2))
-        sips -z "$retina" "$retina" "$root/designs/brand/loffo-symbol-transparent.png" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+        sips -z "$retina" "$retina" "$app_icon" --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/Loffo.icns"
-    sips -Z 256 "$root/designs/brand/loffo-symbol-transparent.png" --out "$app/Contents/Resources/LoffoMark.png" >/dev/null
+    sips -Z 256 "$transparent_icon" --out "$app/Contents/Resources/LoffoMark.png" >/dev/null
 fi
 cp "$root/Apps/Loffo/Info.plist" "$app/Contents/Info.plist"
 codesign --force --sign - "$app" >/dev/null

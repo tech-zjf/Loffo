@@ -2,12 +2,9 @@ import SwiftUI
 
 /// sRGB tokens measured against the approved workspace screens at 1280 × 720 points.
 public enum LoffoPalette {
-    public static let canvas = Color(red: 0.986, green: 0.977, blue: 0.986)
-    public static let surface = Color(.sRGB, red: 252 / 255, green: 251 / 255, blue: 253 / 255, opacity: 1)
-    public static let comparisonSurface = Color(
-        .sRGB, red: 252 / 255, green: 250 / 255, blue: 253 / 255, opacity: 1)
-    public static let inspectorSurface = Color(
-        .sRGB, red: 253 / 255, green: 250 / 255, blue: 252 / 255, opacity: 1)
+    public static let canvas = Color.white
+    public static let surface = Color.white
+    public static let comparisonSurface = Color.white
     public static let accent = Color(red: 1.0, green: 0.38, blue: 0.06)
     public static let selection = Color(red: 0.993, green: 0.940, blue: 0.920)
     public static let text = Color(red: 0.08, green: 0.08, blue: 0.10)
@@ -23,14 +20,18 @@ public enum LoffoPalette {
 public enum LoffoMetrics {
     public static let rail: CGFloat = 64
     public static let sidebar: CGFloat = 284
-    public static let inspector: CGFloat = 290
-    public static let header: CGFloat = 54
-    public static let toolbar: CGFloat = 54
+    public static let header: CGFloat = 40
+    // The window uses a transparent hidden titlebar and the workspace extends under it.
+    // Keep the brand mark just below the native traffic-light controls.
+    public static let railTopInset: CGFloat = 20
+    public static let brandMark: CGFloat = 28
+    public static let brandBottomSpacing: CGFloat = 10
+    public static let toolbar: CGFloat = 42
+    public static let statusBar: CGFloat = 32
     public static let changesRow: CGFloat = 38
     public static let row: CGFloat = 31
     public static let line: CGFloat = 20
     public static let codeSize: CGFloat = 12
-    public static let diffTrailingInset: CGFloat = 12
     public static let radius: CGFloat = 18
     public static let comparisonRadius: CGFloat = 10
     public static let cardRadius: CGFloat = 12

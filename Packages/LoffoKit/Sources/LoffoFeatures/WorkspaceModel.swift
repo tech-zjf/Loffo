@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import LoffoDomain
+import OSLog
 
 public enum ChangesIndicator: Equatable {
     case hidden, checking, unavailable, clean
@@ -12,12 +13,22 @@ public enum ChangesIndicator: Equatable {
     @Published public private(set) var changesError: String?
     @Published public private(set) var history: [FileCommit] = []
     @Published public private(set) var historyError: String?
+    @Published public private(set) var repositoryHistory: [FileCommit] = []
+    @Published public private(set) var repositoryHistoryError: String?
+    @Published public private(set) var repositoryHistoryIsLoading = false
+    @Published public private(set) var repositoryHistoryHasMore = false
     private var historyWorker: Task<Void, Never>?
     private var historyRequest = UUID()
+    private var repositoryHistoryWorker: Task<Void, Never>?
+    private var repositoryHistoryRequest = UUID()
+    private var repositoryHistoryRevision: String?
+    private var repositoryHistoryOffset = 0
     @Published private(set) var fileTree: [FileTreeNode] = []
     @Published private(set) var fileTreeRevision = UUID()
     @Published public private(set) var branchLabel = L10n.text("Local folder")
     @Published public private(set) var root: URL?
+    private var rootIdentity: WorkspaceRootIdentity?
+    private var rootMissingRetryCount = 0
     @Published public private(set) var files: [ProjectFile] = []
     @Published public private(set) var selected: String?
     @Published public private(set) var presentation: CodePresentation?
@@ -62,6 +73,7 @@ public enum ChangesIndicator: Equatable {
     private var repositoryFileLeases: [URL: any ObservationLease] = [:]
     private var monitoringRetry: Task<Void, Never>?
     private var listingWorker: Task<Void, Never>?
+    private var activeRead: CancellableRead?
     private var listingWorkerID = UUID()
     private var listingRequested = false
     private var listingUserRequested = false
@@ -88,6 +100,7 @@ public enum ChangesIndicator: Equatable {
     private var previewWorkspace: URL?
     private var baseline: BaselineSnapshot?
     private var changesRevision: String?
+    private let openSignposter = OSSignposter(subsystem: "app.loffo", category: "Workspace")
 
     public init(
         workspace: any WorkspaceReading, syntax: any SyntaxProviding, diff: any DiffComputing,
@@ -107,6 +120,8 @@ public enum ChangesIndicator: Equatable {
     }
 
     public func open(_ url: URL) async {
+        let openInterval = openSignposter.beginInterval("workspaceOpen")
+        defer { openSignposter.endInterval("workspaceOpen", openInterval) }
         let url = url.resolvingSymlinksInPath()
         listingWorker?.cancel()
         listingWorker = nil
@@ -151,6 +166,7 @@ public enum ChangesIndicator: Equatable {
         presentation = nil
         baseline = nil
         changesRevision = nil
+        resetRepositoryHistory()
         files = []
         changedFiles = []
         changesError = nil
@@ -158,10 +174,24 @@ public enum ChangesIndicator: Equatable {
         fileListingWarning = nil
         fileTree = []
         root = url
+        rootIdentity = nil
+        rootMissingRetryCount = 0
         error = nil
-        let rootLease = await observer.observeWorkspaceChanges(url) { [weak self] change in
-            guard let self, self.projectEpoch == epoch else { return }
-            self.workspaceChanged(change)
+        let capturedRootIdentity: WorkspaceRootIdentity?
+        do {
+            capturedRootIdentity = try await workspace.rootIdentity(at: url)
+        } catch {
+            guard projectEpoch == epoch else { return }
+            self.error = error.localizedDescription
+            return
+        }
+        guard projectEpoch == epoch else { return }
+        rootIdentity = capturedRootIdentity
+        let rootLease = await traceOpenStage("rootWatcherSetup") {
+            await observer.observeWorkspaceChanges(url) { [weak self] change in
+                guard let self, self.projectEpoch == epoch else { return }
+                self.workspaceChanged(change)
+            }
         }
         guard projectEpoch == epoch else {
             rootLease.cancel()
@@ -170,7 +200,9 @@ public enum ChangesIndicator: Equatable {
         repositoryLeases.append(rootLease)
         updateMonitoringStatus()
         do {
-            let metadataRoots = try await workspace.repositoryObservationRoots(in: url)
+            let metadataRoots = try await traceOpenStage("repositoryRootDiscovery") {
+                try await workspace.repositoryObservationRoots(in: url)
+            }
             guard projectEpoch == epoch else { return }
             let rootPath = url.resolvingSymlinksInPath().standardizedFileURL.path
             var observedPaths = [rootPath]
@@ -182,10 +214,11 @@ public enum ChangesIndicator: Equatable {
                             || path.hasPrefix(observed.hasSuffix("/") ? observed : observed + "/")
                     })
                 else { continue }
-                let metadataLease = await observer.observeWorkspaceChanges(metadataRoot) {
-                    [weak self] change in
-                    guard let self, self.projectEpoch == epoch else { return }
-                    self.workspaceChanged(change)
+                let metadataLease = await traceOpenStage("metadataWatcherSetup") {
+                    await observer.observeWorkspaceChanges(metadataRoot) { [weak self] change in
+                        guard let self, self.projectEpoch == epoch else { return }
+                        self.workspaceChanged(change)
+                    }
                 }
                 guard projectEpoch == epoch else {
                     metadataLease.cancel()
@@ -198,11 +231,11 @@ public enum ChangesIndicator: Equatable {
                 while true {
                     openingNeedsRescan = false
                     listingEpoch = listingGeneration
-                    guard
+                    let watchesReady = try await traceOpenStage("repositoryFileWatchBinding") {
                         try await bindStableRepositoryFiles(
-                            in: url, epoch: epoch, generation: listingEpoch
-                        )
-                    else {
+                            in: url, epoch: epoch, generation: listingEpoch)
+                    }
+                    guard watchesReady else {
                         guard projectEpoch == epoch else { return }
                         continue
                     }
@@ -218,21 +251,26 @@ public enum ChangesIndicator: Equatable {
             while true {
                 openingNeedsRescan = false
                 listingEpoch = listingGeneration
-                listing = try await workspace.files(in: url)
+                listing = try await traceOpenStage("initialFileListing") {
+                    try await workspace.files(in: url)
+                }
                 guard projectEpoch == epoch else { return }
                 guard listingGeneration == listingEpoch else { continue }
+                try await validateWorkspaceRootIdentity(
+                    url, epoch: epoch, failure: .workspaceRootChangedWhileOpening)
                 branch =
                     listing.usesGitIgnore
-                    ? try await workspace.branch(in: url) : L10n.text("Local folder")
+                    ? try await traceOpenStage("branchLookup") { try await workspace.branch(in: url) }
+                    : L10n.text("Local folder")
                 guard projectEpoch == epoch else { return }
                 guard listingGeneration == listingEpoch else { continue }
                 if metadataRoots.isEmpty, listing.usesGitIgnore {
                     openingNeedsRescan = false
-                    guard
+                    let watchesReady = try await traceOpenStage("repositoryFileWatchBinding") {
                         try await bindStableRepositoryFiles(
-                            in: url, epoch: epoch, generation: listingEpoch
-                        )
-                    else {
+                            in: url, epoch: epoch, generation: listingEpoch)
+                    }
+                    guard watchesReady else {
                         guard projectEpoch == epoch else { return }
                         continue
                     }
@@ -240,9 +278,13 @@ public enum ChangesIndicator: Equatable {
                     guard listingGeneration == listingEpoch, !openingNeedsRescan else { continue }
                 }
                 let paths = listing.files
-                tree = await Task.detached { FileTreeNode.build(paths) }.value
+                tree = await traceOpenStage("initialFileTreeProjection") {
+                    await Task.detached { FileTreeNode.build(paths) }.value
+                }
                 guard projectEpoch == epoch else { return }
                 guard listingGeneration == listingEpoch, !openingNeedsRescan else { continue }
+                try await validateWorkspaceRootIdentity(
+                    url, epoch: epoch, failure: .workspaceRootChangedWhileOpening)
                 break
             }
 
@@ -260,6 +302,31 @@ public enum ChangesIndicator: Equatable {
             guard projectEpoch == epoch, listingGeneration == listingEpoch else { return }
             self.error = error.localizedDescription
         }
+    }
+
+    private func traceOpenStage<Value>(
+        _ name: StaticString, operation: () async throws -> Value
+    ) async rethrows -> Value {
+        let interval = openSignposter.beginInterval(name)
+        defer { openSignposter.endInterval(name, interval) }
+        return try await operation()
+    }
+
+    private func validateWorkspaceRootIdentity(
+        _ url: URL, epoch: UUID, failure: WorkspaceFailure = .workspaceRootChanged
+    ) async throws {
+        guard let expected = rootIdentity else { return }
+        let actual: WorkspaceRootIdentity?
+        do {
+            actual = try await workspace.rootIdentity(at: url)
+        } catch let rootFailure as WorkspaceFailure {
+            if case .workspaceRootTemporarilyUnavailable = rootFailure {
+                noteWorkspaceRootTemporarilyUnavailable()
+            }
+            throw rootFailure
+        }
+        guard projectEpoch == epoch else { throw CancellationError() }
+        guard actual == expected else { throw failure }
     }
 
     public func select(_ path: String) {
@@ -295,6 +362,12 @@ public enum ChangesIndicator: Equatable {
         if !monitoringAvailable && root != nil { scheduleMonitoringRetry() }
     }
 
+    private func noteWorkspaceRootTemporarilyUnavailable() {
+        monitoringAvailable = false
+        reviewed = false
+        scheduleMonitoringRetry()
+    }
+
     private func scheduleMonitoringRetry() {
         guard monitoringRetry == nil else { return }
         let epoch = projectEpoch
@@ -302,6 +375,30 @@ public enum ChangesIndicator: Equatable {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 guard let self, self.projectEpoch == epoch else { return }
+                if let root = self.root, self.rootIdentity != nil {
+                    do {
+                        try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
+                        self.rootMissingRetryCount = 0
+                    } catch is CancellationError {
+                        return
+                    } catch let failure as WorkspaceFailure {
+                        if case .workspaceRootTemporarilyUnavailable = failure {
+                            self.rootMissingRetryCount += 1
+                            if self.rootMissingRetryCount >= 3 {
+                                self.invalidateWorkspaceAfterRootReplacement(root)
+                                return
+                            }
+                            continue
+                        }
+                        if Self.isWorkspaceRootReplacement(failure) {
+                            self.invalidateWorkspaceAfterRootReplacement(root)
+                            return
+                        }
+                        self.error = failure.localizedDescription
+                    } catch {
+                        self.error = error.localizedDescription
+                    }
+                }
                 for lease in self.repositoryLeases { await lease.retry() }
                 for lease in self.repositoryFileLeases.values { await lease.retry() }
                 await self.lease?.retry()
@@ -327,11 +424,79 @@ public enum ChangesIndicator: Equatable {
                 let entries = try await self.workspace.history(in: root, path: path)
                 guard self.projectEpoch == epoch && self.selected == path && self.historyRequest == request
                 else { return }
+                try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
                 self.history = entries
                 self.historyError = nil
             } catch is CancellationError { return } catch {
                 if self.projectEpoch == epoch && self.selected == path && self.historyRequest == request {
-                    self.historyError = error.localizedDescription
+                    if Self.isWorkspaceRootReplacement(error) {
+                        self.invalidateWorkspaceAfterRootReplacement(root)
+                    } else {
+                        self.historyError = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    public func loadMoreRepositoryHistory() {
+        loadRepositoryHistory(reset: false)
+    }
+
+    private func resetRepositoryHistory() {
+        repositoryHistoryWorker?.cancel()
+        repositoryHistoryWorker = nil
+        repositoryHistoryRequest = UUID()
+        repositoryHistory = []
+        repositoryHistoryError = nil
+        repositoryHistoryIsLoading = false
+        repositoryHistoryHasMore = false
+        repositoryHistoryRevision = nil
+        repositoryHistoryOffset = 0
+    }
+
+    private func loadRepositoryHistory(reset: Bool) {
+        guard showsDiff, let root, let changesRevision else { return }
+        if !reset && (repositoryHistoryIsLoading || !repositoryHistoryHasMore) { return }
+        if reset { resetRepositoryHistory() }
+        let epoch = projectEpoch
+        let request = UUID()
+        repositoryHistoryRequest = request
+        let revision = reset ? changesRevision : repositoryHistoryRevision
+        let offset = reset ? 0 : repositoryHistoryOffset
+        repositoryHistoryIsLoading = true
+        repositoryHistoryWorker = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if self.projectEpoch == epoch && self.repositoryHistoryRequest == request {
+                    self.repositoryHistoryIsLoading = false
+                    self.repositoryHistoryWorker = nil
+                }
+            }
+            do {
+                let page = try await self.workspace.repositoryHistory(
+                    in: root, revision: revision, offset: offset, limit: 30)
+                guard self.projectEpoch == epoch, self.repositoryHistoryRequest == request,
+                    self.showsDiff, self.changesRevision == page.revision
+                else { return }
+                try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
+                if reset {
+                    self.repositoryHistory = page.commits
+                } else {
+                    self.repositoryHistory.append(contentsOf: page.commits)
+                }
+                self.repositoryHistoryRevision = page.revision
+                self.repositoryHistoryOffset = page.nextOffset
+                self.repositoryHistoryHasMore = page.hasMore
+                self.repositoryHistoryError = nil
+            } catch is CancellationError { return } catch {
+                guard self.projectEpoch == epoch, self.repositoryHistoryRequest == request else { return }
+                if Self.isWorkspaceRootReplacement(error) {
+                    self.invalidateWorkspaceAfterRootReplacement(root)
+                } else {
+                    self.repositoryHistoryError = error.localizedDescription
+                    if reset { self.repositoryHistory = [] }
+                    self.repositoryHistoryHasMore = false
                 }
             }
         }
@@ -341,6 +506,11 @@ public enum ChangesIndicator: Equatable {
         guard showsDiff != enabled else { return }
         supersedeWorker()
         showsDiff = enabled
+        if enabled {
+            loadRepositoryHistory(reset: true)
+        } else {
+            resetRepositoryHistory()
+        }
         refreshFiles(immediate: true)
         gate.reset()
         baseline = nil
@@ -400,6 +570,8 @@ public enum ChangesIndicator: Equatable {
     }
 
     private func supersedeWorker() {
+        activeRead?.cancel()
+        activeRead = nil
         guard let worker else { return }
         worker.cancel()
         guard retiringWorkerID == nil else { return }
@@ -431,10 +603,8 @@ public enum ChangesIndicator: Equatable {
             }
             let isDeleted =
                 comparison && changedFiles.first(where: { $0.path == selected })?.changeKind == .deleted
-            let snapshot = try await CancellableRead().run(
-                workspace: workspace, windowAdmission: readAdmission, appAdmission: appReadAdmission,
-                root: root, path: selected,
-                allowMissing: isDeleted)
+            let snapshot = try await readSelectedSnapshot(
+                root: root, path: selected, allowMissing: isDeleted)
             guard gate.intent == intent, refreshGeneration == generation else { return }
             if comparison {
                 if changedFiles.first(where: { $0.path == selected })?.hasModeChange == true {
@@ -493,14 +663,17 @@ public enum ChangesIndicator: Equatable {
                 let expandedContext = expandsContext
                 let initialProjection = try await projectionWork.run(bytes: projectionCost) {
                     try TextLimits.validatePresentationRows(result.lines.lazy.map(\.text))
-                    return try UnifiedProjection.cancellable(result: result, expanded: expandedContext)
+                    return (
+                        try UnifiedProjection.cancellable(result: result, expanded: expandedContext),
+                        try SideBySideProjection.cancellable(result: result)
+                    )
                 }
                 guard gate.intent == intent, refreshGeneration == generation else { return }
                 error = nil
                 if gate.accept(stamp) {
                     presentation = CodePresentation(
-                        text: initialProjection.text, diff: result, rows: initialProjection.rows,
-                        hunkStarts: initialProjection.hunkStarts)
+                        text: initialProjection.0.text, diff: result, rows: initialProjection.0.rows,
+                        hunkStarts: initialProjection.0.hunkStarts, sideBySide: initialProjection.1)
                     baselineLabel = base.label
                     cachePresentation(path: selected, version: snapshot.version, generation: cacheGeneration)
                 } else if gate.accepted != stamp {
@@ -525,12 +698,30 @@ public enum ChangesIndicator: Equatable {
             return
         } catch {
             guard gate.intent == intent, refreshGeneration == generation else { return }
+            if let failure = error as? WorkspaceFailure,
+                case .workspaceRootTemporarilyUnavailable = failure
+            {
+                noteWorkspaceRootTemporarilyUnavailable()
+            }
             gate.reset()
             baseline = nil
             presentation = nil
             previews.remove(workspace: root, path: selected, comparison: comparison)
             self.error = error.localizedDescription
         }
+    }
+
+    private func readSelectedSnapshot(root: URL, path: String, allowMissing: Bool) async throws
+        -> TextSnapshot
+    {
+        let operation = CancellableRead()
+        activeRead = operation
+        defer {
+            if activeRead === operation { activeRead = nil }
+        }
+        return try await operation.run(
+            workspace: workspace, windowAdmission: readAdmission, appAdmission: appReadAdmission,
+            root: root, path: path, allowMissing: allowMissing, expectedRootIdentity: rootIdentity)
     }
 
     private func scheduleRefinement(
@@ -554,16 +745,19 @@ public enum ChangesIndicator: Equatable {
                 guard !Task.isCancelled, self?.gate.intent == intent, self?.refreshGeneration == generation,
                     let expanded = self?.expandsContext
                 else { return }
-                let projection: UnifiedProjection
+                let projections: (UnifiedProjection, SideBySideProjection)
                 do {
                     let cost =
                         8 * 1_024 * 1_024 + (snapshot.byteCount + baseline.text.utf8.count) * 4
                         + result.lines.count * 192 + (oldSpans.spans.count + newSpans.spans.count) * 48
-                    projection = try await projectionWork.run(bytes: cost) {
+                    projections = try await projectionWork.run(bytes: cost) {
                         let spans = try DiffSyntaxProjection.cancellableSpans(
                             result: result, before: oldSpans.spans, after: newSpans.spans)
-                        return try UnifiedProjection.cancellable(
+                        let unified = try UnifiedProjection.cancellable(
                             result: result, syntax: spans, expanded: expanded)
+                        let sideBySide = try SideBySideProjection.cancellable(
+                            result: result, beforeSyntax: oldSpans.spans, afterSyntax: newSpans.spans)
+                        return (unified, sideBySide)
                     }
                 } catch is CancellationError {
                     return
@@ -573,10 +767,13 @@ public enum ChangesIndicator: Equatable {
                     else { return }
                     self.presentation = CodePresentation(
                         text: current.text, syntax: current.syntax, diff: current.diff,
-                        rows: current.rows, hunkStarts: current.hunkStarts, syntaxLimited: true)
+                        rows: current.rows, hunkStarts: current.hunkStarts,
+                        sideBySide: current.sideBySide, syntaxLimited: true)
                     self.cachePresentation(path: path, version: snapshot.version, generation: cacheGeneration)
                     return
                 }
+                let projection = projections.0
+                let sideBySide = projections.1
                 guard let self, !Task.isCancelled, self.gate.intent == intent,
                     self.refreshGeneration == generation,
                     self.gate.accept(
@@ -585,6 +782,7 @@ public enum ChangesIndicator: Equatable {
                 self.presentation = CodePresentation(
                     text: projection.text, syntax: projection.syntax, diff: result, rows: projection.rows,
                     hunkStarts: projection.hunkStarts,
+                    sideBySide: sideBySide,
                     syntaxLimited: oldSpans.isLimited || newSpans.isLimited)
                 self.cachePresentation(path: path, version: snapshot.version, generation: cacheGeneration)
             } else {
@@ -752,6 +950,7 @@ public enum ChangesIndicator: Equatable {
                         listing = try await self.workspace.files(in: root)
                     }
                     guard self.projectEpoch == epoch, self.listingGeneration == generation else { continue }
+                    try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
                     if listing.usesGitIgnore && initialListing == nil && fullListing {
                         guard
                             try await self.bindStableRepositoryFiles(
@@ -764,11 +963,13 @@ public enum ChangesIndicator: Equatable {
                         : (listing.usesGitIgnore
                             ? try await self.workspace.branch(in: root) : L10n.text("Local folder"))
                     guard self.projectEpoch == epoch, self.listingGeneration == generation else { continue }
+                    try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
                     let previousFiles = self.files
                     let tree = await Task.detached {
                         listing.files == previousFiles ? nil : FileTreeNode.build(listing.files)
                     }.value
                     guard self.projectEpoch == epoch, self.listingGeneration == generation else { continue }
+                    try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
                     self.branchLabel = branch
                     self.repositorySupportsChanges = listing.usesGitIgnore
                     if fullListing { self.rememberCompleteListing(listing) }
@@ -783,6 +984,7 @@ public enum ChangesIndicator: Equatable {
                             guard self.projectEpoch == epoch, self.listingGeneration == generation else {
                                 continue
                             }
+                            try await self.validateWorkspaceRootIdentity(root, epoch: epoch)
                             if changes.isLimited {
                                 self.changesError = L10n.text("The changed-file listing is incomplete.")
                                 self.invalidateChanges(in: root)
@@ -806,10 +1008,24 @@ public enum ChangesIndicator: Equatable {
                                 self.presentation = nil
                                 self.reviewed = false
                             }
+                            let revisionChanged = self.changesRevision != changes.revision
                             self.changesRevision = changes.revision
                             self.changedFiles = changes.files
                             self.changesError = nil
+                            if self.showsDiff && revisionChanged {
+                                self.loadRepositoryHistory(reset: true)
+                            }
                         } catch {
+                            if let failure = error as? WorkspaceFailure,
+                                case .workspaceRootTemporarilyUnavailable = failure
+                            {
+                                self.noteWorkspaceRootTemporarilyUnavailable()
+                            }
+                            if let failure = error as? WorkspaceFailure,
+                                Self.isWorkspaceRootReplacement(failure)
+                            {
+                                throw failure
+                            }
                             if self.projectEpoch == epoch && self.listingGeneration == generation {
                                 self.changesError = error.localizedDescription
                                 self.invalidateChanges(in: root)
@@ -825,11 +1041,22 @@ public enum ChangesIndicator: Equatable {
                     self.fileListingWarning =
                         listing.isLimited ? L10n.text("The file listing is incomplete.") : nil
                 } catch is CancellationError { break } catch {
+                    if let failure = error as? WorkspaceFailure,
+                        case .workspaceRootTemporarilyUnavailable = failure
+                    {
+                        self.noteWorkspaceRootTemporarilyUnavailable()
+                    }
                     if self.projectEpoch == epoch && self.listingGeneration == generation {
-                        self.error = error.localizedDescription
-                        if self.showsDiff || self.repositorySupportsChanges {
-                            self.changesError = error.localizedDescription
-                            self.invalidateChanges(in: root)
+                        if let failure = error as? WorkspaceFailure,
+                            Self.isWorkspaceRootReplacement(failure)
+                        {
+                            self.invalidateWorkspaceAfterRootReplacement(root)
+                        } else {
+                            self.error = error.localizedDescription
+                            if self.showsDiff || self.repositorySupportsChanges {
+                                self.changesError = error.localizedDescription
+                                self.invalidateChanges(in: root)
+                            }
                         }
                     }
                 }
@@ -860,6 +1087,70 @@ public enum ChangesIndicator: Equatable {
             changesRevision = nil
             changedFiles = []
         }
+        resetRepositoryHistory()
+    }
+
+    private static func isWorkspaceRootReplacement(_ failure: WorkspaceFailure) -> Bool {
+        switch failure {
+        case .workspaceRootChanged, .workspaceRootChangedWhileOpening: true
+        default: false
+        }
+    }
+
+    private static func isWorkspaceRootReplacement(_ error: Error) -> Bool {
+        guard let failure = error as? WorkspaceFailure else { return false }
+        return isWorkspaceRootReplacement(failure)
+    }
+
+    private func invalidateWorkspaceAfterRootReplacement(_ root: URL) {
+        let message = WorkspaceFailure.workspaceRootChanged.localizedDescription
+        error = message
+        branchLabel = L10n.text("Local folder")
+        changesError = message
+        reviewed = false
+        supersedeWorker()
+        refreshRequested = false
+        userRefreshRequested = false
+        isUpdating = false
+        gate.reset()
+        baseline = nil
+        listingWorker?.cancel()
+        listingWorker = nil
+        listingWorkerID = UUID()
+        listingGeneration = UUID()
+        listingRequested = false
+        initialListingForRefresh = nil
+        pendingFullListing = false
+        activeFullListing = false
+        listingUserRequested = false
+        isRefreshingFiles = false
+        files = []
+        fileTree = []
+        fileTreeRevision = UUID()
+        completeListing = nil
+        completeFilePaths = []
+        fileListingWarning = nil
+        repositorySupportsChanges = false
+        selected = nil
+        presentation = nil
+        historyWorker?.cancel()
+        historyWorker = nil
+        historyRequest = UUID()
+        history = []
+        historyError = nil
+        lease?.cancel()
+        lease = nil
+        monitoringRetry?.cancel()
+        monitoringRetry = nil
+        for lease in repositoryLeases { lease.cancel() }
+        repositoryLeases = []
+        for lease in repositoryFileLeases.values { lease.cancel() }
+        repositoryFileLeases = [:]
+        monitoringAvailable = false
+        rootMissingRetryCount = 0
+        previews.invalidate(workspace: root)
+        invalidateChanges(in: root)
+        changesError = message
     }
 
     public func reload() {
@@ -875,6 +1166,8 @@ public enum ChangesIndicator: Equatable {
         comparisonWorker?.cancel()
         refinementWorker?.cancel()
         projectEpoch = UUID()
+        rootIdentity = nil
+        rootMissingRetryCount = 0
         baseline = nil
         changesRevision = nil
         presentation = nil
@@ -882,6 +1175,7 @@ public enum ChangesIndicator: Equatable {
         files = []
         changedFiles = []
         changesError = nil
+        resetRepositoryHistory()
         repositorySupportsChanges = false
         fileTree = []
         fileTreeRevision = UUID()

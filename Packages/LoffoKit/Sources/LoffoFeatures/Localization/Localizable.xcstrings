@@ -1,12 +1,62 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%ld file changed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%ld file changed"
+          }
+        }
+      }
+    },
+    "%ld files changed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%ld files changed"
+          }
+        }
+      }
+    },
+    "+%ld Added": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "+%ld Added"
+          }
+        }
+      }
+    },
     "A clear view of your code.": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "A clear view of your code."
+          }
+        }
+      }
+    },
+    "Added": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Added"
+          }
+        }
+      }
+    },
+    "After": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "After"
           }
         }
       }
@@ -31,6 +81,16 @@
         }
       }
     },
+    "Before": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before"
+          }
+        }
+      }
+    },
     "Before: no final newline": {
       "localizations": {
         "en": {
@@ -41,12 +101,72 @@
         }
       }
     },
-    "Changes in this file": {
+    "Changes": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Changes in this file"
+            "value": "Changes"
+          }
+        }
+      }
+    },
+    "Changes unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Changes unavailable"
+          }
+        }
+      }
+    },
+    "Checking for changes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking for changes"
+          }
+        }
+      }
+    },
+    "Choose a valid VS Code or Zed theme JSON file.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a valid VS Code or Zed theme JSON file."
+          }
+        }
+      }
+    },
+    "Code": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Code"
+          }
+        }
+      }
+    },
+    "Collapse Context": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapse Context"
+          }
+        }
+      }
+    },
+    "Collapsed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collapsed"
           }
         }
       }
@@ -61,12 +181,122 @@
         }
       }
     },
+    "Compare revisions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compare revisions"
+          }
+        }
+      }
+    },
+    "Conflicted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conflicted"
+          }
+        }
+      }
+    },
+    "Copied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied"
+          }
+        }
+      }
+    },
+    "Copy commit ID": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy commit ID"
+          }
+        }
+      }
+    },
+    "Copy path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy path"
+          }
+        }
+      }
+    },
+    "Could not import theme": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not import theme"
+          }
+        }
+      }
+    },
+    "Deleted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deleted"
+          }
+        }
+      }
+    },
+    "Detached HEAD": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detached HEAD"
+          }
+        }
+      }
+    },
+    "Escape": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esc"
+          }
+        }
+      }
+    },
+    "Expanded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expanded"
+          }
+        }
+      }
+    },
     "File": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "File"
+          }
+        }
+      }
+    },
+    "File actions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File actions"
           }
         }
       }
@@ -81,12 +311,42 @@
         }
       }
     },
+    "File monitoring unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File monitoring unavailable"
+          }
+        }
+      }
+    },
     "File outline": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "File outline"
+          }
+        }
+      }
+    },
+    "File type: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File type: %@"
+          }
+        }
+      }
+    },
+    "Files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files"
           }
         }
       }
@@ -131,6 +391,26 @@
         }
       }
     },
+    "Import Editor Theme…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import Editor Theme…"
+          }
+        }
+      }
+    },
+    "Initial → Working tree": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Initial → Working tree"
+          }
+        }
+      }
+    },
     "Large rewrite · coarse comparison": {
       "localizations": {
         "en": {
@@ -147,6 +427,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Last commit"
+          }
+        }
+      }
+    },
+    "Live": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Live"
+          }
+        }
+      }
+    },
+    "Loading file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading file"
+          }
+        }
+      }
+    },
+    "Load more commits": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load more commits"
+          }
+        }
+      }
+    },
+    "Local folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Local folder"
           }
         }
       }
@@ -171,6 +491,46 @@
         }
       }
     },
+    "Mark as reviewed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mark as reviewed"
+          }
+        }
+      }
+    },
+    "Modified": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified"
+          }
+        }
+      }
+    },
+    "Next change": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next change"
+          }
+        }
+      }
+    },
+    "No changes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No changes"
+          }
+        }
+      }
+    },
     "No declarations in this file": {
       "localizations": {
         "en": {
@@ -181,12 +541,92 @@
         }
       }
     },
+    "No local history": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No local history"
+          }
+        }
+      }
+    },
+    "No matching files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching files"
+          }
+        }
+      }
+    },
+    "No commits yet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No commits yet"
+          }
+        }
+      }
+    },
+    "No preview": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No preview"
+          }
+        }
+      }
+    },
+    "Not reviewed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not reviewed"
+          }
+        }
+      }
+    },
+    "Not selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not selected"
+          }
+        }
+      }
+    },
+    "OK": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OK"
+          }
+        }
+      }
+    },
     "Open Folder…": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Open Folder…"
+          }
+        }
+      }
+    },
+    "Open a file from the project tree.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a file from the project tree."
           }
         }
       }
@@ -221,522 +661,12 @@
         }
       }
     },
-    "Read only": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Read only"
-          }
-        }
-      }
-    },
-    "Reload File and Baseline": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reload File and Baseline"
-          }
-        }
-      }
-    },
-    "Repository history is not available yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Repository history is not available yet"
-          }
-        }
-      }
-    },
-    "Revision comparison is not available yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Revision comparison is not available yet"
-          }
-        }
-      }
-    },
-    "Unified diff": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unified diff"
-          }
-        }
-      }
-    },
-    "%ld file changed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%ld file changed"
-          }
-        }
-      }
-    },
-    "Show Full File": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show Full File"
-          }
-        }
-      }
-    },
-    "Mark as reviewed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mark as reviewed"
-          }
-        }
-      }
-    },
-    "Live": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Live"
-          }
-        }
-      }
-    },
-    "Workspace": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Workspace"
-          }
-        }
-      }
-    },
-    "Reviewed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Reviewed"
-          }
-        }
-      }
-    },
-    "Split diff is not available yet": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Split diff is not available yet"
-          }
-        }
-      }
-    },
-    "Copied": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copied"
-          }
-        }
-      }
-    },
-    "Copy path": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copy path"
-          }
-        }
-      }
-    },
-    "Collapse Context": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Collapse Context"
-          }
-        }
-      }
-    },
-    "Changes": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Changes"
-          }
-        }
-      }
-    },
-    "−%ld Removed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "−%ld Removed"
-          }
-        }
-      }
-    },
-    "Updating": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Updating"
-          }
-        }
-      }
-    },
-    "+%ld Added": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "+%ld Added"
-          }
-        }
-      }
-    },
-    "%ld files changed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%ld files changed"
-          }
-        }
-      }
-    },
-    "Watching files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Watching files"
-          }
-        }
-      }
-    },
-    "Files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Files"
-          }
-        }
-      }
-    },
-    "Not reviewed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not reviewed"
-          }
-        }
-      }
-    },
     "Previous change": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Previous change"
-          }
-        }
-      }
-    },
-    "Review": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Review"
-          }
-        }
-      }
-    },
-    "Compare revisions": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Compare revisions"
-          }
-        }
-      }
-    },
-    "Next change": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Next change"
-          }
-        }
-      }
-    },
-    "Loading file": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Loading file"
-          }
-        }
-      }
-    },
-    "Copy commit ID": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Copy commit ID"
-          }
-        }
-      }
-    },
-    "No local history": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No local history"
-          }
-        }
-      }
-    },
-    "Selected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Selected"
-          }
-        }
-      }
-    },
-    "Untracked": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Untracked"
-          }
-        }
-      }
-    },
-    "Added": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Added"
-          }
-        }
-      }
-    },
-    "Modified": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modified"
-          }
-        }
-      }
-    },
-    "Deleted": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Deleted"
-          }
-        }
-      }
-    },
-    "Renamed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Renamed"
-          }
-        }
-      }
-    },
-    "Conflicted": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Conflicted"
-          }
-        }
-      }
-    },
-    "Collapsed": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Collapsed"
-          }
-        }
-      }
-    },
-    "Open a file from the project tree.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open a file from the project tree."
-          }
-        }
-      }
-    },
-    "Your code, in focus.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your code, in focus."
-          }
-        }
-      }
-    },
-    "Select a file": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Select a file"
-          }
-        }
-      }
-    },
-    "Code": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Code"
-          }
-        }
-      }
-    },
-    "No preview": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No preview"
-          }
-        }
-      }
-    },
-    "No matching files": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No matching files"
-          }
-        }
-      }
-    },
-    "Expanded": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Expanded"
-          }
-        }
-      }
-    },
-    "Detached HEAD": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Detached HEAD"
-          }
-        }
-      }
-    },
-    "Not selected": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Not selected"
-          }
-        }
-      }
-    },
-    "The file could not be loaded.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The file could not be loaded."
-          }
-        }
-      }
-    },
-    "File actions": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "File actions"
-          }
-        }
-      }
-    },
-    "The changed-file listing is incomplete.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The changed-file listing is incomplete."
-          }
-        }
-      }
-    },
-    "Local folder": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Local folder"
-          }
-        }
-      }
-    },
-    "The file listing is incomplete.": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The file listing is incomplete."
           }
         }
       }
@@ -751,72 +681,52 @@
         }
       }
     },
-    "Could not import theme": {
+    "Quick Open": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Could not import theme"
+            "value": "Quick Open"
           }
         }
       }
     },
-    "OK": {
+    "Read only": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "OK"
+            "value": "Read only"
           }
         }
       }
     },
-    "Choose a valid VS Code or Zed theme JSON file.": {
+    "Recent commits": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choose a valid VS Code or Zed theme JSON file."
+            "value": "Recent commits"
           }
         }
       }
     },
-    "Import Editor Theme…": {
+    "Reload File and Baseline": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Import Editor Theme…"
+            "value": "Reload File and Baseline"
           }
         }
       }
     },
-    "Use Default Syntax Theme": {
+    "Renamed": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Use Default Syntax Theme"
-          }
-        }
-      }
-    },
-    "Toggle sidebar": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toggle sidebar"
-          }
-        }
-      }
-    },
-    "Resize sidebar": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resize sidebar"
+            "value": "Renamed"
           }
         }
       }
@@ -831,52 +741,122 @@
         }
       }
     },
-    "Changes unavailable": {
+    "Resize sidebar": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Changes unavailable"
+            "value": "Resize sidebar"
           }
         }
       }
     },
-    "Checking for changes": {
+    "Review": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Checking for changes"
+            "value": "Review"
           }
         }
       }
     },
-    "File monitoring unavailable": {
+    "Reviewed": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "File monitoring unavailable"
+            "value": "Reviewed"
           }
         }
       }
     },
-    "Initial → Working tree": {
+    "Revision comparison is not available yet": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Initial → Working tree"
+            "value": "Revision comparison is not available yet"
           }
         }
       }
     },
-    "No changes": {
+    "Search files by name": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "No changes"
+            "value": "Search files by name"
+          }
+        }
+      }
+    },
+    "Select a file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a file"
+          }
+        }
+      }
+    },
+    "Selected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selected"
+          }
+        }
+      }
+    },
+    "Show Full File": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show Full File"
+          }
+        }
+      }
+    },
+    "Side-by-side diff": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Side-by-side diff"
+          }
+        }
+      }
+    },
+    "Showing the top 200 matches. Refine your search.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Showing the top 200 matches. Refine your search."
+          }
+        }
+      }
+    },
+    "Side-by-side view unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Side-by-side view unavailable"
+          }
+        }
+      }
+    },
+    "Split diff is not available yet": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Split diff is not available yet"
           }
         }
       }
@@ -887,6 +867,186 @@
           "stringUnit": {
             "state": "translated",
             "value": "Syntax highlighting is incomplete for this file."
+          }
+        }
+      }
+    },
+    "The changed-file listing is incomplete.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The changed-file listing is incomplete."
+          }
+        }
+      }
+    },
+    "The comparison could not be aligned within its work budget.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The comparison could not be aligned within its work budget."
+          }
+        }
+      }
+    },
+    "The file could not be loaded.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file could not be loaded."
+          }
+        }
+      }
+    },
+    "The file listing is incomplete.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The file listing is incomplete."
+          }
+        }
+      }
+    },
+    "Toggle sidebar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle sidebar"
+          }
+        }
+      }
+    },
+    "Type to search files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type to search files"
+          }
+        }
+      }
+    },
+    "UTF-8": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UTF-8"
+          }
+        }
+      }
+    },
+    "Unified diff": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unified diff"
+          }
+        }
+      }
+    },
+    "Switch to side-by-side diff": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch to side-by-side diff"
+          }
+        }
+      }
+    },
+    "Switch to unified diff": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Switch to unified diff"
+          }
+        }
+      }
+    },
+    "Toggle diff layout": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toggle diff layout"
+          }
+        }
+      }
+    },
+    "Untracked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Untracked"
+          }
+        }
+      }
+    },
+    "Updating": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Updating"
+          }
+        }
+      }
+    },
+    "Use Default Syntax Theme": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Default Syntax Theme"
+          }
+        }
+      }
+    },
+    "Watching files": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Watching files"
+          }
+        }
+      }
+    },
+    "Workspace": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace"
+          }
+        }
+      }
+    },
+    "Your code, in focus.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your code, in focus."
+          }
+        }
+      }
+    },
+    "−%ld Removed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "−%ld Removed"
           }
         }
       }

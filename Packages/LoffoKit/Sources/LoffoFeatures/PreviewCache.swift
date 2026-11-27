@@ -99,6 +99,12 @@ import LoffoDomain
         removeEntries { $0.workspace == workspace && $0.path == path && $0.comparison == comparison }
     }
 
+    func invalidate(workspace: URL) {
+        generation &+= 1
+        let workspace = Self.workspaceKey(workspace)
+        removeEntries { $0.workspace == workspace }
+    }
+
     private func removeEntries(where predicate: (Key) -> Bool) {
         let removed = entries.keys.filter(predicate)
         for key in removed {

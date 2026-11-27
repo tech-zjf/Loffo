@@ -66,6 +66,10 @@ struct FileTreeNode: Identifiable, Sendable {
         query.isEmpty ? files : files.filter { $0.path.localizedCaseInsensitiveContains(query) }
     }
 
+    static func quickOpenMatches(_ files: [ProjectFile], query: String) -> [ProjectFile] {
+        QuickOpenIndex(files: files).matching(query)
+    }
+
     static func build(_ files: [ProjectFile]) -> [FileTreeNode] {
         func nodes(_ paths: [[String]], prefix: String) -> [FileTreeNode] {
             let grouped = Dictionary(grouping: paths.filter { !$0.isEmpty }, by: { $0[0] })

@@ -24,6 +24,27 @@ import Testing
     #expect(FileTreeNode.matching(tree, query: "").count == tree.count)
 }
 
+@Test func quickOpenUsesSubsequenceMatchingAndRanksCloseMatchesFirst() {
+    let files = [
+        ProjectFile(path: "src/Legacy/Panel.swift"),
+        ProjectFile(path: "Packages/LoffoKit/Sources/LoffoPopover.swift"),
+        ProjectFile(path: "README.md"),
+    ]
+    let matches = FileTreeNode.quickOpenMatches(files, query: "lop")
+    #expect(matches.map(\.path) == ["Packages/LoffoKit/Sources/LoffoPopover.swift"])
+    #expect(FileTreeNode.quickOpenMatches(files, query: "xyz").isEmpty)
+}
+
+@Test func quickOpenBoundsBroadResultsAcrossStandardRepositorySize() {
+    let files = (0..<10_000).map { ProjectFile(path: String(format: "files/group/file%05d.txt", $0)) }
+    let result = QuickOpenIndex(files: files).search("file")
+
+    #expect(result.files.count == QuickOpenIndex.resultLimit)
+    #expect(result.hasMore)
+    #expect(result.files.first?.path == "files/group/file00000.txt")
+    #expect(!QuickOpenIndex(files: files).search("missing").hasMore)
+}
+
 @Test func unsupportedAttributeMessageKeepsItsParameter() {
     let error = WorkspaceFailure.unsupportedAttribute("working-tree-encoding")
     #expect(error.errorDescription?.contains("working-tree-encoding") == true)

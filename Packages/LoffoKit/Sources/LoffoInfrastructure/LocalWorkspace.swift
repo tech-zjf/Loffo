@@ -138,6 +138,19 @@ public actor LocalWorkspace: WorkspaceReading {
         try await documents.read(in: root, path: path, allowMissing: allowMissing)
     }
 
+    public func rootIdentity(at root: URL) async throws -> WorkspaceRootIdentity? {
+        try await documents.rootIdentity(at: root)
+    }
+
+    public func read(
+        in root: URL, path: String, allowMissing: Bool,
+        expectedRootIdentity: WorkspaceRootIdentity?
+    ) async throws -> TextSnapshot {
+        try await documents.read(
+            in: root, path: path, allowMissing: allowMissing,
+            expectedRootIdentity: expectedRootIdentity)
+    }
+
     public func repositoryObservationRoots(in root: URL) async throws -> [URL] {
         guard let git else { return [] }
         var roots: Set<URL> = []
@@ -618,6 +631,64 @@ public actor LocalWorkspace: WorkspaceReading {
             index += 3
         }
         return commits
+    }
+
+    public func repositoryHistory(
+        in root: URL, revision expectedRevision: String?, offset: Int, limit: Int
+    ) async throws -> RepositoryHistoryPage {
+        guard let git else {
+            return RepositoryHistoryPage(
+                revision: nil, commits: [], nextOffset: offset, hasMore: false)
+        }
+        let pageOffset = min(max(offset, 0), 200)
+        let pageLimit = min(max(limit, 1), 40)
+        let head = try await Self.headRevision(git, in: root)
+        guard !head.hasPrefix("unborn:") else {
+            return RepositoryHistoryPage(revision: head, commits: [], nextOffset: pageOffset, hasMore: false)
+        }
+        if let expectedRevision, expectedRevision != head {
+            throw WorkspaceFailure.unavailable("HEAD changed during the scan. Reload to retry.")
+        }
+        let pageRevision = expectedRevision ?? head
+        let remainingBudget = 200 - pageOffset
+        guard remainingBudget > 0 else {
+            return RepositoryHistoryPage(
+                revision: pageRevision, commits: [], nextOffset: pageOffset, hasMore: false)
+        }
+        let boundedPageLimit = min(pageLimit, remainingBudget)
+        let output = try await git.run(
+            [
+                "log", "--max-count=\(boundedPageLimit + 1)", "--skip=\(pageOffset)",
+                "--format=%H%x00%ct%x00%s%x00", pageRevision,
+            ], at: root, limit: 128 * 1024)
+        guard output.status == 0 else {
+            throw WorkspaceFailure.unavailable("File history is unavailable.")
+        }
+        guard try await Self.headRevision(git, in: root) == pageRevision else {
+            throw WorkspaceFailure.unavailable("HEAD changed during the scan. Reload to retry.")
+        }
+        let fields = output.data.split(separator: 0, omittingEmptySubsequences: false).map {
+            String(decoding: $0, as: UTF8.self)
+        }
+        var commits: [FileCommit] = []
+        var index = 0
+        while index < fields.count {
+            let id = fields[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if id.isEmpty && index == fields.count - 1 { break }
+            guard index + 2 < fields.count, let seconds = TimeInterval(fields[index + 1]), seconds.isFinite,
+                id.count == 40 || id.count == 64, id.allSatisfy(\.isHexDigit)
+            else { throw WorkspaceFailure.unavailable("Git returned an invalid history record.") }
+            commits.append(
+                FileCommit(
+                    id: id, subject: fields[index + 2],
+                    committedAt: Date(timeIntervalSince1970: seconds)))
+            index += 3
+        }
+        let hasMore = commits.count > boundedPageLimit && boundedPageLimit < remainingBudget
+        if commits.count > boundedPageLimit { commits.removeLast() }
+        return RepositoryHistoryPage(
+            revision: pageRevision, commits: commits, nextOffset: pageOffset + commits.count,
+            hasMore: hasMore)
     }
 
     public func branch(in root: URL) async throws -> String {
